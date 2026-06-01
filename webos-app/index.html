@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Video Player</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f0f;
+      color: #fff;
+      font-family: sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    /* ── Grid screen ── */
+    #grid-screen {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #grid-header {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 20px 52px 16px;
+      border-bottom: 1px solid #1e1e1e;
+    }
+
+    #grid-header h1 {
+      font-size: 1.6rem;
+      font-weight: 600;
+      letter-spacing: -0.5px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    #grid-header h1.private-mode { color: #e8a000; }
+
+    #header-status {
+      font-size: 0.85rem;
+      color: #666;
+      flex: 1;
+    }
+
+    #search-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #search-input {
+      background: #222;
+      color: #ddd;
+      border: 2px solid transparent;
+      border-radius: 6px;
+      padding: 7px 14px;
+      font-size: 0.85rem;
+      width: 220px;
+      outline: none;
+    }
+
+    #search-input:focus { border-color: #e8621a; }
+
+    #search-btn, #search-clear {
+      background: #222;
+      color: #ddd;
+      border: 2px solid transparent;
+      border-radius: 6px;
+      padding: 7px 14px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      outline: none;
+    }
+
+    #search-btn:focus, #search-clear:focus { border-color: #e8621a; }
+    #search-btn { background: #e8621a; color: #fff; }
+    #search-clear { display: none; }
+
+    #sort-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.85rem;
+      color: #888;
+    }
+
+    #order-by {
+      background: #222;
+      color: #ddd;
+      border: 2px solid transparent;
+      border-radius: 6px;
+      padding: 7px 12px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      outline: none;
+    }
+
+    #order-by:focus { border-color: #e8621a; }
+
+    #order-dir {
+      background: #222;
+      color: #ddd;
+      border: 2px solid transparent;
+      border-radius: 6px;
+      padding: 7px 14px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      outline: none;
+      min-width: 80px;
+    }
+
+    #order-dir:focus { border-color: #e8621a; }
+
+    #refresh-btn {
+      background: #222;
+      color: #ddd;
+      border: 2px solid transparent;
+      border-radius: 6px;
+      padding: 7px 14px;
+      font-size: 1.1rem;
+      cursor: pointer;
+      outline: none;
+      line-height: 1;
+    }
+
+    #refresh-btn:focus { border-color: #e8621a; }
+    #refresh-btn:disabled { cursor: default; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    #refresh-btn.spinning { animation: pulse 0.8s ease-in-out infinite; }
+
+    #grid-area {
+      flex: 1;
+      padding: 20px 52px;
+      overflow: hidden;
+      outline: none;
+    }
+
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 16px;
+      height: 100%;
+    }
+
+    .card {
+      border-radius: 8px;
+      overflow: hidden;
+      cursor: pointer;
+      outline: none;
+      background: #1a1a1a;
+      transition: transform 0.12s, outline 0.08s;
+    }
+
+    .card.focused {
+      outline: 3px solid #e8621a;
+      transform: scale(1.04);
+      z-index: 1;
+    }
+
+    .thumb-wrap {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      background: #111;
+      overflow: hidden;
+    }
+
+    .thumb-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .thumb-placeholder {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.5rem;
+      color: #333;
+    }
+
+    .private-btn {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      width: 34px;
+      height: 34px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+    }
+
+    .card.focused .private-btn { display: flex; }
+    .private-btn:hover, .private-btn:focus { background: #e8a000; outline: none; }
+
+    .delete-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 34px;
+      height: 34px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+    }
+
+    .card.focused .delete-btn { display: flex; }
+    .delete-btn:hover, .delete-btn:focus { background: #c0392b; outline: none; }
+
+    .resume-bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      background: #e8621a;
+      pointer-events: none;
+    }
+
+    .duration-badge {
+      position: absolute;
+      bottom: 6px;
+      right: 6px;
+      background: rgba(0, 0, 0, 0.82);
+      color: #eee;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+      letter-spacing: 0.3px;
+    }
+
+    .card-info {
+      padding: 8px 10px 10px;
+    }
+
+    .card-title {
+      font-size: 0.82rem;
+      color: #ccc;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.4;
+    }
+
+    /* ── Pagination ── */
+    #pagination {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 52px;
+      border-top: 1px solid #1e1e1e;
+    }
+
+    #page-info {
+      font-size: 0.88rem;
+      color: #666;
+      min-width: 100px;
+      text-align: center;
+    }
+
+    /* ── Loading / Error ── */
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: #0f0f0f;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      z-index: 100;
+    }
+
+    .spinner {
+      width: 52px;
+      height: 52px;
+      border: 4px solid #222;
+      border-top-color: #e8621a;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #loading-overlay p { color: #666; font-size: 1rem; }
+
+    #error-overlay {
+      position: fixed;
+      inset: 0;
+      background: #0f0f0f;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      z-index: 100;
+    }
+
+    #error-overlay .icon { font-size: 3rem; }
+    #error-overlay p { color: #888; font-size: 1rem; }
+    #retry-btn {
+      margin-top: 8px;
+      padding: 10px 32px;
+      background: #e8621a;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+
+    /* ── Player screen ── */
+    #player-screen {
+      position: fixed;
+      inset: 0;
+      background: #000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #video-player {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    #video-bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 48px 48px 28px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.85));
+      pointer-events: none;
+      opacity: 1;
+      transition: opacity 0.4s;
+    }
+
+    #video-bar.hidden { opacity: 0; }
+
+    #video-title {
+      font-size: 1.2rem;
+      color: #eee;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 8px;
+    }
+
+    #video-controls {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 0.9rem;
+      color: #bbb;
+    }
+
+    #play-state { font-size: 1rem; }
+
+    #progress-wrap {
+      flex: 1;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      pointer-events: all;
+    }
+
+    #progress-track {
+      width: 100%;
+      height: 5px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 3px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #progress-wrap:hover #progress-track { height: 8px; }
+
+    #progress-bar {
+      height: 100%;
+      background: #e8621a;
+      width: 0%;
+      transition: width 0.4s linear;
+    }
+
+    #progress-bar.dragging { transition: none; }
+
+    /* ── Delete confirmation dialog ── */
+    #confirm-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+    }
+
+    #confirm-overlay.open { display: flex; }
+
+    .dialog-box {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 36px 44px;
+      max-width: 560px;
+      width: 90%;
+      text-align: center;
+    }
+
+    .dialog-box .dialog-icon { font-size: 2.4rem; margin-bottom: 16px; }
+
+    .dialog-box h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .dialog-box p {
+      font-size: 0.88rem;
+      color: #888;
+      margin-bottom: 28px;
+      word-break: break-word;
+    }
+
+    .dialog-btns {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+    }
+
+    .dialog-btn {
+      padding: 10px 36px;
+      border-radius: 7px;
+      font-size: 0.95rem;
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: border-color 0.1s;
+    }
+
+    .dialog-btn:focus { outline: none; border-color: #e8621a; }
+
+    #dialog-cancel { background: #2e2e2e; color: #ccc; }
+    #dialog-delete { background: #c0392b; color: #fff; }
+
+  </style>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <p>Loading videos…</p>
+</div>
+
+<!-- Error -->
+<div id="error-overlay">
+  <div class="icon">⚠</div>
+  <p id="error-text">Could not connect to server</p>
+  <button id="retry-btn" onclick="fetchPage(currentPage)">Retry</button>
+</div>
+
+<!-- Grid screen -->
+<div id="grid-screen" style="display:none">
+  <div id="grid-header">
+    <h1>Videos</h1>
+    <span id="header-status"></span>
+    <button id="refresh-btn" title="Rescan library">Rescan</button>
+    <div id="search-controls">
+      <input id="search-input" type="text" placeholder="Search…" />
+      <button id="search-btn">Search</button>
+      <button id="search-clear">✕ Clear</button>
+    </div>
+    <div id="sort-controls">
+      <span>Sort:</span>
+      <select id="order-by">
+        <option value="title">Title</option>
+        <option value="createdAt">Date Created</option>
+        <option value="updatedAt" selected>Date Modified</option>
+      </select>
+      <button id="order-dir">↓ Desc</button>
+    </div>
+  </div>
+  <div id="grid-area" tabindex="-1">
+    <div id="grid"></div>
+  </div>
+  <div id="pagination">
+    <span id="page-info"></span>
+  </div>
+</div>
+
+<!-- Delete confirmation -->
+<div id="confirm-overlay">
+  <div class="dialog-box">
+    <div class="dialog-icon">🗑</div>
+    <h2>Delete this video?</h2>
+    <p id="confirm-title"></p>
+    <div class="dialog-btns">
+      <button class="dialog-btn" id="dialog-cancel">Cancel</button>
+      <button class="dialog-btn" id="dialog-delete">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Player screen -->
+<div id="player-screen">
+  <video id="video-player"></video>
+  <div id="video-bar">
+    <div id="video-title"></div>
+    <div id="video-controls">
+      <span id="play-state">▶</span>
+      <div id="progress-wrap"><div id="progress-track"><div id="progress-bar"></div></div></div>
+      <span id="video-time"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+  const SERVER_URL = 'http://192.168.1.2:3000';
+  const COLS = 4;
+  const PAGE_SIZE = 12;
+
+  let currentPage = 1;
+  let totalPages = 1;
+  let videos = [];
+  let focusedIndex = 0;
+  let barTimer = null;
+  let orderBy = 'updatedAt';
+  let orderDir = 'desc';
+  let showPrivate = false;
+  let searchQuery = '';
+
+  const loadingEl    = document.getElementById('loading-overlay');
+  const errorEl      = document.getElementById('error-overlay');
+  const gridScreen   = document.getElementById('grid-screen');
+  const playerScreen = document.getElementById('player-screen');
+  const gridEl       = document.getElementById('grid');
+  const videoEl      = document.getElementById('video-player');
+  const videoBar     = document.getElementById('video-bar');
+  const confirmEl    = document.getElementById('confirm-overlay');
+
+  let pendingDeleteIndex = null;
+  let currentVideoId = null;
+  let posInterval = null;
+
+  const RESUME_THRESHOLD = 30; // don't resume if within 30s of the end
+
+  function savePos(id, time) {
+    localStorage.setItem(`pos_${id}`, String(Math.floor(time)));
+  }
+
+  function loadPos(id) {
+    return parseInt(localStorage.getItem(`pos_${id}`) || '0', 10);
+  }
+
+  function clearPos(id) {
+    localStorage.removeItem(`pos_${id}`);
+  }
+
+  // ── Fetch & render ──────────────────────────────────────
+
+  async function fetchPage(page) {
+    loadingEl.style.display = 'flex';
+    errorEl.style.display = 'none';
+    gridScreen.style.display = 'none';
+
+    try {
+      const q = searchQuery ? `&q=${encodeURIComponent(searchQuery)}` : '';
+      const res = await fetch(`${SERVER_URL}/videos?page=${page}&limit=${PAGE_SIZE}&orderBy=${orderBy}&order=${orderDir}${q}&private=${showPrivate}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      videos = data.videos;
+      currentPage = data.page;
+      totalPages = data.totalPages;
+
+      document.getElementById('header-status').textContent =
+        `${data.total} videos`;
+      document.getElementById('page-info').textContent =
+        `${currentPage} / ${totalPages}`;
+
+      renderGrid();
+      loadingEl.style.display = 'none';
+      gridScreen.style.display = 'flex';
+      focusCard(0);
+      document.getElementById('grid-area').focus();
+    } catch (e) {
+      loadingEl.style.display = 'none';
+      document.getElementById('error-text').textContent =
+        `Could not reach server: ${e.message}`;
+      errorEl.style.display = 'flex';
+    }
+  }
+
+  function goPage(page) {
+    if (page < 1 || page > totalPages) return;
+    fetchPage(page);
+  }
+
+  function renderGrid() {
+    gridEl.innerHTML = '';
+    for (let i = 0; i < videos.length; i++) {
+      const v = videos[i];
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.tabIndex = 0;
+      card.dataset.index = String(i);
+
+      const thumbSrc = `${SERVER_URL}${v.thumbnailUrl}`;
+      const savedPos = loadPos(v.id);
+      const resumePct = savedPos > 0 && v.duration > 0
+        ? Math.min(100, (savedPos / v.duration) * 100).toFixed(1)
+        : 0;
+      card.innerHTML = `
+        <div class="thumb-wrap">
+          <img src="${thumbSrc}" alt="" onerror="this.parentNode.innerHTML='<div class=thumb-placeholder>▶</div>'">
+          <button class="private-btn" title="${showPrivate ? 'Remove from private' : 'Mark as private'}">${showPrivate ? '🔓' : '🔒'}</button>
+          <button class="delete-btn" title="Delete">🗑</button>
+          <span class="duration-badge">${v.durationFormatted}</span>
+          ${resumePct > 0 ? `<div class="resume-bar" style="width:${resumePct}%"></div>` : ''}
+        </div>
+        <div class="card-info">
+          <div class="card-title" title="${escHtml(v.title)}">${escHtml(v.title)}</div>
+        </div>
+      `;
+      card.addEventListener('mouseover', () => focusCard(i));
+      card.addEventListener('click', () => playVideo(i));
+      card.querySelector('.private-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePrivate(v.id, i);
+      });
+      card.querySelector('.delete-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        showDeleteConfirm(i);
+      });
+      gridEl.appendChild(card);
+    }
+  }
+
+  function escHtml(str) {
+    return str.replace(/[&<>"']/g, c =>
+      ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  // ── Focus management ────────────────────────────────────
+
+  function focusCard(index) {
+    const cards = gridEl.querySelectorAll('.card');
+    cards.forEach(c => c.classList.remove('focused'));
+    if (index < 0 || index >= cards.length) return;
+    focusedIndex = index;
+    const card = cards[index];
+    card.classList.add('focused');
+    card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  // ── Delete ───────────────────────────────────────────────
+
+  function showDeleteConfirm(index) {
+    pendingDeleteIndex = index;
+    document.getElementById('confirm-title').textContent = videos[index].title;
+    confirmEl.classList.add('open');
+    document.getElementById('dialog-cancel').focus();
+  }
+
+  function closeConfirm() {
+    confirmEl.classList.remove('open');
+    pendingDeleteIndex = null;
+    focusCard(focusedIndex);
+  }
+
+  async function confirmDelete() {
+    if (pendingDeleteIndex === null) return;
+    const video = videos[pendingDeleteIndex];
+    confirmEl.classList.remove('open');
+
+    try {
+      const res = await fetch(`${SERVER_URL}/video/${video.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+    } catch (e) {
+      alert(`Delete failed: ${e.message}`);
+      focusCard(focusedIndex);
+      return;
+    }
+
+    // Remove from local list and re-render
+    const deletedIndex = pendingDeleteIndex;
+    pendingDeleteIndex = null;
+    videos.splice(deletedIndex, 1);
+
+    const nextFocus = Math.min(deletedIndex, videos.length - 1);
+    renderGrid();
+    focusCard(nextFocus >= 0 ? nextFocus : 0);
+
+    document.getElementById('header-status').textContent = `${videos.length} videos`;
+  }
+
+  document.getElementById('dialog-cancel').addEventListener('click', closeConfirm);
+  document.getElementById('dialog-delete').addEventListener('click', confirmDelete);
+
+  // Dialog keyboard: Left/Right switches buttons, Escape cancels
+  confirmEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closeConfirm(); e.preventDefault(); return; }
+    if (e.key === 'ArrowLeft') { document.getElementById('dialog-cancel').focus(); e.preventDefault(); }
+    if (e.key === 'ArrowRight') { document.getElementById('dialog-delete').focus(); e.preventDefault(); }
+  });
+
+  // ── Playback ────────────────────────────────────────────
+
+  function playVideo(index) {
+    const v = videos[index];
+    focusedIndex = index;
+    currentVideoId = v.id;
+
+    videoEl.src = `${SERVER_URL}${v.videoUrl}`;
+    document.getElementById('video-title').textContent = v.title;
+    playerScreen.style.display = 'flex';
+    gridScreen.style.display = 'none';
+    showBar();
+    history.pushState({ screen: 'player' }, '');
+
+    videoEl.addEventListener('loadedmetadata', function onMeta() {
+      videoEl.removeEventListener('loadedmetadata', onMeta);
+      const saved = loadPos(v.id);
+      if (saved > 0 && saved < videoEl.duration - RESUME_THRESHOLD) {
+        videoEl.currentTime = saved;
+      }
+      videoEl.play().catch(() => {});
+      clearInterval(posInterval);
+      posInterval = setInterval(() => {
+        if (!videoEl.paused && currentVideoId) savePos(currentVideoId, videoEl.currentTime);
+      }, 5000);
+    });
+  }
+
+  function backToGrid() {
+    if (currentVideoId && videoEl.currentTime > 0) {
+      savePos(currentVideoId, videoEl.currentTime);
+    }
+    clearInterval(posInterval);
+    posInterval = null;
+    currentVideoId = null;
+    videoEl.pause();
+    videoEl.src = '';
+    playerScreen.style.display = 'none';
+    gridScreen.style.display = 'flex';
+    focusCard(focusedIndex);
+    document.getElementById('grid-area').focus();
+  }
+
+  // webOS back button pops history → this fires → we go back to grid
+  window.addEventListener('popstate', () => {
+    if (playerScreen.style.display !== 'none') {
+      backToGrid();
+    }
+  });
+
+  function formatTime(secs) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = Math.floor(secs % 60);
+    return h > 0
+      ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+      : `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function updateTimeDisplay() {
+    if (isSeeking) return;
+    const cur = videoEl.currentTime;
+    const dur = videoEl.duration || 0;
+    document.getElementById('video-time').textContent =
+      `${formatTime(cur)} / ${formatTime(dur)}`;
+    document.getElementById('progress-bar').style.width =
+      dur ? `${(cur / dur) * 100}%` : '0%';
+  }
+
+  videoEl.addEventListener('timeupdate', updateTimeDisplay);
+  videoEl.addEventListener('play',  () => { document.getElementById('play-state').textContent = '⏸'; });
+  videoEl.addEventListener('pause', () => {
+    document.getElementById('play-state').textContent = '▶';
+    if (currentVideoId && videoEl.currentTime > 0) savePos(currentVideoId, videoEl.currentTime);
+  });
+  videoEl.addEventListener('ended', () => {
+    if (currentVideoId) clearPos(currentVideoId);
+    clearInterval(posInterval);
+    posInterval = null;
+  });
+
+  // ── Seekbar ──────────────────────────────────────────────
+  const progressWrap = document.getElementById('progress-wrap');
+  const progressBar  = document.getElementById('progress-bar');
+  let isSeeking = false;
+
+  function seekTo(e) {
+    const rect = progressWrap.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    videoEl.currentTime = ratio * (videoEl.duration || 0);
+    progressBar.style.width = `${ratio * 100}%`;
+    showBar();
+  }
+
+  progressWrap.addEventListener('mousedown', (e) => {
+    isSeeking = true;
+    progressBar.classList.add('dragging');
+    seekTo(e);
+    e.stopPropagation();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (isSeeking) seekTo(e);
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isSeeking) {
+      isSeeking = false;
+      progressBar.classList.remove('dragging');
+    }
+  });
+
+  function showBar() {
+    videoBar.classList.remove('hidden');
+    clearTimeout(barTimer);
+    barTimer = setTimeout(() => videoBar.classList.add('hidden'), 3000);
+  }
+
+  videoEl.addEventListener('mousemove', showBar);
+  videoEl.addEventListener('click', () => {
+    videoEl.paused ? videoEl.play() : videoEl.pause();
+    showBar();
+  });
+
+  // ── Keyboard navigation ─────────────────────────────────
+
+  window.addEventListener('keydown', (e) => {
+    const inPlayer = playerScreen.style.display !== 'none';
+    const inConfirm = confirmEl.classList.contains('open');
+
+    if (inConfirm) return; // let the dialog handle its own keys
+
+    if (inPlayer) {
+      if (e.keyCode === 461 || e.key === 'Escape') {
+        history.back(); // pops the state pushed in playVideo → triggers popstate → backToGrid()
+      } else if (e.key === 'Enter') {
+        videoEl.paused ? videoEl.play() : videoEl.pause();
+        showBar();
+      } else if (e.key === 'ArrowRight') {
+        videoEl.currentTime = Math.min(videoEl.duration, videoEl.currentTime + 10);
+        showBar();
+      } else if (e.key === 'ArrowLeft') {
+        videoEl.currentTime = Math.max(0, videoEl.currentTime - 10);
+        showBar();
+      } else {
+        showBar();
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    // Grid navigation
+    const cards = gridEl.querySelectorAll('.card');
+    const count = cards.length;
+
+    // Red button (403) or keyboard Delete key → delete focused card
+    if (e.keyCode === 403 || e.key === 'Delete') {
+      if (count > 0) showDeleteConfirm(focusedIndex);
+      e.preventDefault();
+      return;
+    }
+
+    switch (e.key) {
+      case 'ArrowRight':
+        if (focusedIndex % COLS < COLS - 1 && focusedIndex + 1 < count) {
+          focusCard(focusedIndex + 1);
+          e.preventDefault();
+        }
+        break;
+
+      case 'ArrowLeft':
+        if (focusedIndex % COLS > 0) {
+          focusCard(focusedIndex - 1);
+          e.preventDefault();
+        }
+        break;
+
+      case 'ArrowDown':
+        if (focusedIndex + COLS < count) {
+          focusCard(focusedIndex + COLS);
+          e.preventDefault();
+        }
+        break;
+
+      case 'ArrowUp':
+        if (focusedIndex >= COLS) {
+          focusCard(focusedIndex - COLS);
+          e.preventDefault();
+        }
+        break;
+
+      case 'Enter':
+        if (count > 0) {
+          playVideo(focusedIndex);
+          e.preventDefault();
+        }
+        break;
+    }
+  }, true); // capture phase — fires before the video element handles the event
+
+
+  // ── Refresh / rescan ────────────────────────────────────
+  const refreshBtn = document.getElementById('refresh-btn');
+
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    refreshBtn.classList.add('spinning');
+    try {
+      await fetch(`${SERVER_URL}/scan`);
+    } catch (e) {
+      alert(`Rescan failed: ${e.message}`);
+    } finally {
+      refreshBtn.disabled = false;
+      refreshBtn.classList.remove('spinning');
+    }
+    fetchPage(1);
+  });
+
+  // ── Private mode ────────────────────────────────────────
+  const titleEl = document.querySelector('#grid-header h1');
+  let titleClickTimer = null;
+
+  titleEl.addEventListener('click', () => {
+    if (titleClickTimer) {
+      // Second click within 400ms — toggle private mode
+      clearTimeout(titleClickTimer);
+      titleClickTimer = null;
+      showPrivate = !showPrivate;
+      titleEl.textContent = showPrivate ? '🔒 Private' : 'Videos';
+      titleEl.classList.toggle('private-mode', showPrivate);
+      fetchPage(1);
+    } else {
+      titleClickTimer = setTimeout(() => { titleClickTimer = null; }, 400);
+    }
+  });
+
+  async function togglePrivate(videoId, cardIndex) {
+    const method = showPrivate ? 'DELETE' : 'POST';
+    try {
+      const res = await fetch(`${SERVER_URL}/video/${videoId}/private`, { method });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      alert(`Failed: ${e.message}`);
+      return;
+    }
+    // Remove from current view — it no longer belongs in this filter
+    videos.splice(cardIndex, 1);
+    renderGrid();
+    document.getElementById('header-status').textContent = `${videos.length} videos`;
+    focusCard(Math.min(cardIndex, videos.length - 1));
+    document.getElementById('grid-area').focus();
+  }
+
+  // ── Search controls ─────────────────────────────────────
+  const searchInput = document.getElementById('search-input');
+  const searchClear = document.getElementById('search-clear');
+
+  function doSearch() {
+    searchQuery = searchInput.value.trim();
+    searchClear.style.display = searchQuery ? 'block' : 'none';
+    fetchPage(1);
+  }
+
+  function clearSearch() {
+    searchQuery = '';
+    searchInput.value = '';
+    searchClear.style.display = 'none';
+    fetchPage(1);
+  }
+
+  document.getElementById('search-btn').addEventListener('click', doSearch);
+  searchClear.addEventListener('click', clearSearch);
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { doSearch(); e.stopPropagation(); }
+    if (e.key === 'Escape') { clearSearch(); e.stopPropagation(); }
+  });
+
+  // Prevent grid arrow-key navigation while search input is focused
+  searchInput.addEventListener('keydown', (e) => {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+      e.stopPropagation();
+    }
+  });
+
+  // ── Sort controls ───────────────────────────────────────
+  document.getElementById('order-by').addEventListener('change', (e) => {
+    orderBy = e.target.value;
+    fetchPage(1);
+  });
+
+  document.getElementById('order-dir').addEventListener('click', () => {
+    orderDir = orderDir === 'asc' ? 'desc' : 'asc';
+    document.getElementById('order-dir').textContent = orderDir === 'asc' ? '↑ Asc' : '↓ Desc';
+    fetchPage(1);
+  });
+
+  // ── Cursor state: focus current card when cursor hides so D-pad works ──
+  document.addEventListener('cursorStateChange', (e) => {
+    if (!e.detail.visibility) {
+      const cards = gridEl.querySelectorAll('.card');
+      if (cards[focusedIndex]) cards[focusedIndex].focus({ preventScroll: true });
+    }
+  });
+
+  // ── Scroll wheel page navigation (double-scroll to change page) ──
+  let wheelDebounce = null;
+  let gestureCount = 0;
+  let gestureDir = 0;
+  let gestureTime = 0;
+  const GESTURE_WINDOW = 800; // ms between two scrolls to count as double
+
+  function onWheelGesture(dir) {
+    const now = Date.now();
+    if (dir === gestureDir && now - gestureTime < GESTURE_WINDOW) {
+      gestureCount++;
+      if (gestureCount >= 2) {
+        gestureCount = 0;
+        gestureDir = 0;
+        if (dir > 0) goPage(currentPage + 1);
+        else goPage(currentPage - 1);
+      }
+    } else {
+      gestureCount = 1;
+      gestureDir = dir;
+    }
+    gestureTime = now;
+  }
+
+  document.getElementById('grid-screen').addEventListener('wheel', (e) => {
+    e.preventDefault();
+    clearTimeout(wheelDebounce);
+    const dir = e.deltaY > 0 ? 1 : -1;
+    wheelDebounce = setTimeout(() => onWheelGesture(dir), 50);
+  }, { passive: false });
+
+  // ── Boot ────────────────────────────────────────────────
+  fetchPage(1);
+</script>
+
+</body>
+</html>

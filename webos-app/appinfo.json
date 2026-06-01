@@ -1,0 +1,11 @@
+{
+  "id": "com.example.sambavideoapp",
+  "version": "1.0.0",
+  "vendor": "Example",
+  "type": "web",
+  "main": "index.html",
+  "title": "Samba Video Player",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+"requiredPermissions": ["media.operation"]
+}
