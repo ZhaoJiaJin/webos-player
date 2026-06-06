@@ -135,6 +135,20 @@
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     #refresh-btn.spinning { animation: pulse 0.8s ease-in-out infinite; }
 
+    #settings-btn {
+      background: #222;
+      color: #ddd;
+      border: 2px solid transparent;
+      border-radius: 6px;
+      padding: 7px 14px;
+      font-size: 1.1rem;
+      cursor: pointer;
+      outline: none;
+      line-height: 1;
+    }
+
+    #settings-btn:focus { border-color: #e8621a; }
+
     #grid-area {
       flex: 1;
       padding: 20px 52px;
@@ -334,6 +348,17 @@
       cursor: pointer;
     }
 
+    #error-settings-btn {
+      margin-top: 8px;
+      padding: 10px 32px;
+      background: #2e2e2e;
+      color: #ccc;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+
     /* ── Player screen ── */
     #player-screen {
       position: fixed;
@@ -470,6 +495,76 @@
     #dialog-cancel { background: #2e2e2e; color: #ccc; }
     #dialog-delete { background: #c0392b; color: #fff; }
 
+    /* ── Settings overlay ── */
+    #settings-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+    }
+
+    #settings-overlay.open { display: flex; }
+
+    .settings-box {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 36px 44px;
+      max-width: 520px;
+      width: 90%;
+    }
+
+    .settings-box h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .settings-box label {
+      display: block;
+      font-size: 0.85rem;
+      color: #888;
+      margin-bottom: 6px;
+    }
+
+    .settings-box input {
+      width: 100%;
+      background: #222;
+      color: #ddd;
+      border: 2px solid transparent;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 0.95rem;
+      outline: none;
+      margin-bottom: 24px;
+    }
+
+    .settings-box input:focus { border-color: #e8621a; }
+
+    .settings-btns {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+    }
+
+    .settings-btns .dialog-btn { min-width: 100px; }
+
+    #settings-save { background: #e8621a; color: #fff; }
+
+    .timeout-msg {
+      color: #e8a000;
+      font-size: 0.85rem;
+      margin-top: 10px;
+      text-align: center;
+      display: none;
+    }
+
+    .timeout-msg.visible { display: block; }
+
   </style>
 </head>
 <body>
@@ -484,7 +579,11 @@
 <div id="error-overlay">
   <div class="icon">⚠</div>
   <p id="error-text">Could not connect to server</p>
-  <button id="retry-btn" onclick="fetchPage(currentPage)">Retry</button>
+  <p id="timeout-msg" class="timeout-msg">Connection timed out</p>
+  <div style="display:flex; gap:12px; margin-top:8px;">
+    <button id="retry-btn" onclick="fetchPage(currentPage)">Retry</button>
+    <button id="error-settings-btn" onclick="openSettings()">Settings</button>
+  </div>
 </div>
 
 <!-- Grid screen -->
@@ -493,6 +592,7 @@
     <h1>Videos</h1>
     <span id="header-status"></span>
     <button id="refresh-btn" title="Rescan library">Rescan</button>
+    <button id="settings-btn" title="Server settings" onclick="openSettings()">⚙</button>
     <div id="search-controls">
       <input id="search-input" type="text" placeholder="Search…" />
       <button id="search-btn">Search</button>
@@ -529,6 +629,19 @@
   </div>
 </div>
 
+<!-- Settings -->
+<div id="settings-overlay">
+  <div class="settings-box">
+    <h2>Server Settings</h2>
+    <label for="server-input">Server Address (e.g. http://192.168.1.2:3000)</label>
+    <input id="server-input" type="text" placeholder="http://192.168.1.2:3000" />
+    <div class="settings-btns">
+      <button class="dialog-btn" id="settings-cancel">Cancel</button>
+      <button class="dialog-btn" id="settings-save">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Player screen -->
 <div id="player-screen">
   <video id="video-player"></video>
@@ -543,10 +656,11 @@
 </div>
 
 <script>
-  const SERVER_URL = 'http://192.168.1.2:3000';
   const COLS = 4;
   const PAGE_SIZE = 12;
+  const LOAD_TIMEOUT = 8000;
 
+  let SERVER_URL = localStorage.getItem('serverUrl') || 'http://192.168.1.2:3000';
   let currentPage = 1;
   let totalPages = 1;
   let videos = [];
@@ -556,15 +670,18 @@
   let orderDir = 'desc';
   let showPrivate = false;
   let searchQuery = '';
+  let loadTimer = null;
 
   const loadingEl    = document.getElementById('loading-overlay');
   const errorEl      = document.getElementById('error-overlay');
+  const timeoutMsg   = document.getElementById('timeout-msg');
   const gridScreen   = document.getElementById('grid-screen');
   const playerScreen = document.getElementById('player-screen');
   const gridEl       = document.getElementById('grid');
   const videoEl      = document.getElementById('video-player');
   const videoBar     = document.getElementById('video-bar');
   const confirmEl    = document.getElementById('confirm-overlay');
+  const settingsEl   = document.getElementById('settings-overlay');
 
   let pendingDeleteIndex = null;
   let currentVideoId = null;
@@ -590,6 +707,14 @@
     loadingEl.style.display = 'flex';
     errorEl.style.display = 'none';
     gridScreen.style.display = 'none';
+    timeoutMsg.classList.remove('visible');
+
+    clearTimeout(loadTimer);
+    loadTimer = setTimeout(() => {
+      if (loadingEl.style.display !== 'none') {
+        timeoutMsg.classList.add('visible');
+      }
+    }, LOAD_TIMEOUT);
 
     try {
       const q = searchQuery ? `&q=${encodeURIComponent(searchQuery)}` : '';
@@ -608,11 +733,13 @@
 
       renderGrid();
       loadingEl.style.display = 'none';
+      clearTimeout(loadTimer);
       gridScreen.style.display = 'flex';
       focusCard(0);
       document.getElementById('grid-area').focus();
     } catch (e) {
       loadingEl.style.display = 'none';
+      clearTimeout(loadTimer);
       document.getElementById('error-text').textContent =
         `Could not reach server: ${e.message}`;
       errorEl.style.display = 'flex';
@@ -864,8 +991,9 @@
   window.addEventListener('keydown', (e) => {
     const inPlayer = playerScreen.style.display !== 'none';
     const inConfirm = confirmEl.classList.contains('open');
+    const inSettings = settingsEl.classList.contains('open');
 
-    if (inConfirm) return; // let the dialog handle its own keys
+    if (inConfirm || inSettings) return; // let the dialog handle its own keys
 
     if (inPlayer) {
       if (e.keyCode === 461 || e.key === 'Escape') {
@@ -1070,6 +1198,37 @@
     const dir = e.deltaY > 0 ? 1 : -1;
     wheelDebounce = setTimeout(() => onWheelGesture(dir), 50);
   }, { passive: false });
+
+  // ── Settings modal ──────────────────────────────────────
+  const serverInput = document.getElementById('server-input');
+
+  function openSettings() {
+    serverInput.value = SERVER_URL;
+    settingsEl.classList.add('open');
+    serverInput.focus();
+    serverInput.select();
+  }
+
+  function closeSettings() {
+    settingsEl.classList.remove('open');
+  }
+
+  function saveSettings() {
+    const val = serverInput.value.trim();
+    if (!val) return;
+    SERVER_URL = val.replace(/\/+$/, '');
+    localStorage.setItem('serverUrl', SERVER_URL);
+    closeSettings();
+    fetchPage(1);
+  }
+
+  document.getElementById('settings-cancel').addEventListener('click', closeSettings);
+  document.getElementById('settings-save').addEventListener('click', saveSettings);
+
+  settingsEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closeSettings(); e.preventDefault(); }
+    if (e.key === 'Enter') { saveSettings(); e.preventDefault(); }
+  });
 
   // ── Boot ────────────────────────────────────────────────
   fetchPage(1);
