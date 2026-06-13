@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const crypto = require('crypto');
 
@@ -154,6 +154,15 @@ async function scanVideos() {
       const tags = format.tags || {};
       const stat = fs.statSync(filePath);
 
+      const audioTracks = (probe.streams || [])
+        .filter(s => s.codec_type === 'audio')
+        .map((s, i) => ({
+          index: i,
+          language: (s.tags && (s.tags.language || s.tags.LANGUAGE)) || '',
+          title: (s.tags && (s.tags.title || s.tags.TITLE)) || '',
+          codec: s.codec_name || '',
+        }));
+
       cached = {
         title: tags.title || path.basename(filePath, path.extname(filePath)),
         duration: Math.floor(duration),
@@ -161,6 +170,7 @@ async function scanVideos() {
         size: parseInt(format.size || 0, 10),
         createdAt: stat.birthtime.toISOString(),
         updatedAt: stat.mtime.toISOString(),
+        audioTracks,
         failed: false,
       };
       metaCache[id] = cached;
@@ -181,6 +191,7 @@ async function scanVideos() {
       size: cached.size,
       createdAt: cached.createdAt,
       updatedAt: cached.updatedAt,
+      audioTracks: cached.audioTracks || [],
     });
   }
 
@@ -242,6 +253,7 @@ app.get('/videos', (req, res) => {
     durationFormatted: v.durationFormatted,
     thumbnailUrl: `/thumbnails/${v.id}.jpg`,
     videoUrl: `/video/${v.id}`,
+    audioTracks: v.audioTracks || [],
   }));
 
   res.json({ page, limit, total, totalPages, orderBy, order: orderDir === 1 ? 'asc' : 'desc', videos });
@@ -294,6 +306,75 @@ app.get('/video/:id', (req, res) => {
     });
     fs.createReadStream(filePath).pipe(res);
   }
+});
+
+app.get('/video/:id/info', async (req, res) => {
+  const video = videoCache.find(v => v.id === req.params.id);
+  if (!video) return res.status(404).json({ error: 'Not found' });
+
+  const cached = metaCache[video.id];
+  if (cached && Array.isArray(cached.audioTracks)) {
+    return res.json({ audioTracks: cached.audioTracks });
+  }
+
+  const filePath = path.join(MEDIA_ROOT, video.filePath);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+  const probe = await getMetadata(filePath);
+  const audioTracks = probe
+    ? (probe.streams || [])
+        .filter(s => s.codec_type === 'audio')
+        .map((s, i) => ({
+          index: i,
+          language: (s.tags && (s.tags.language || s.tags.LANGUAGE)) || '',
+          title: (s.tags && (s.tags.title || s.tags.TITLE)) || '',
+          codec: s.codec_name || '',
+        }))
+    : [];
+
+  if (metaCache[video.id]) {
+    metaCache[video.id].audioTracks = audioTracks;
+    saveCache();
+  }
+
+  res.json({ audioTracks });
+});
+
+app.get('/video/:id/audio/:trackIndex', (req, res) => {
+  const video = videoCache.find(v => v.id === req.params.id);
+  if (!video) return res.status(404).send('Not found');
+
+  const filePath = path.join(MEDIA_ROOT, video.filePath);
+  if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
+
+  const trackIndex = parseInt(req.params.trackIndex, 10);
+  if (isNaN(trackIndex) || trackIndex < 0) return res.status(400).send('Invalid track index');
+
+  const startTime = parseFloat(req.query.t) || 0;
+
+  const args = [
+    '-ss', String(startTime),
+    '-i', filePath,
+    '-map', '0:v:0',
+    '-map', `0:a:${trackIndex}`,
+    '-c', 'copy',
+    '-f', 'mp4',
+    '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+    'pipe:1',
+  ];
+
+  res.writeHead(200, {
+    'Content-Type': 'video/mp4',
+    'Transfer-Encoding': 'chunked',
+    'Cache-Control': 'no-cache',
+  });
+
+  const proc = spawn('ffmpeg', args);
+  proc.stdout.pipe(res);
+  proc.stderr.on('data', () => {});
+
+  req.on('close', () => proc.kill('SIGTERM'));
+  proc.on('error', () => { if (!res.writableEnded) res.end(); });
 });
 
 app.delete('/video/:id', (req, res) => {
