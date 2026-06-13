@@ -565,6 +565,64 @@
 
     .timeout-msg.visible { display: block; }
 
+    /* ── Audio track menu ── */
+    #audio-track-overlay {
+      position: absolute;
+      bottom: 130px;
+      right: 48px;
+      z-index: 10;
+      display: none;
+    }
+
+    #audio-track-overlay.open { display: block; }
+
+    #audio-track-menu {
+      background: rgba(12, 12, 12, 0.96);
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      overflow: hidden;
+      min-width: 200px;
+    }
+
+    .audio-menu-header {
+      padding: 9px 16px;
+      font-size: 0.75rem;
+      color: #555;
+      border-bottom: 1px solid #1e1e1e;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .audio-track-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      font-size: 0.88rem;
+      color: #999;
+      cursor: pointer;
+    }
+
+    .audio-track-item.focused { background: rgba(232, 98, 26, 0.25); color: #fff; }
+    .audio-track-item.active { color: #e8621a; }
+    .track-check { width: 14px; font-size: 0.75rem; }
+
+    #audio-track-btn {
+      background: none;
+      border: none;
+      color: #999;
+      font-size: 1rem;
+      cursor: pointer;
+      padding: 2px 8px;
+      border-radius: 4px;
+      pointer-events: all;
+      line-height: 1;
+      display: none;
+    }
+
+    #audio-track-btn:hover,
+    #audio-track-btn.menu-open { color: #fff; background: rgba(255,255,255,0.12); }
+
   </style>
 </head>
 <body>
@@ -645,12 +703,19 @@
 <!-- Player screen -->
 <div id="player-screen">
   <video id="video-player"></video>
+  <div id="audio-track-overlay">
+    <div id="audio-track-menu">
+      <div class="audio-menu-header">Audio Track</div>
+      <div id="audio-track-list"></div>
+    </div>
+  </div>
   <div id="video-bar">
     <div id="video-title"></div>
     <div id="video-controls">
       <span id="play-state">▶</span>
       <div id="progress-wrap"><div id="progress-track"><div id="progress-bar"></div></div></div>
       <span id="video-time"></span>
+      <button id="audio-track-btn" title="Audio track (↑)">🔊</button>
     </div>
   </div>
 </div>
@@ -686,6 +751,14 @@
   let pendingDeleteIndex = null;
   let currentVideoId = null;
   let posInterval = null;
+
+  let audioTracks = [];
+  let currentAudioTrack = 0;
+  let audioMenuFocus = 0;
+
+  const audioOverlay  = document.getElementById('audio-track-overlay');
+  const audioTrackList = document.getElementById('audio-track-list');
+  const audioBtn      = document.getElementById('audio-track-btn');
 
   const RESUME_THRESHOLD = 30; // don't resume if within 30s of the end
 
@@ -862,12 +935,117 @@
     if (e.key === 'ArrowRight') { document.getElementById('dialog-delete').focus(); e.preventDefault(); }
   });
 
+  // ── Audio track menu ────────────────────────────────────
+
+  const LANG_NAMES = {
+    eng: 'English', fre: 'French', fra: 'French', spa: 'Spanish',
+    ger: 'German', deu: 'German', jpn: 'Japanese', kor: 'Korean',
+    chi: 'Chinese', zho: 'Chinese', por: 'Portuguese', ita: 'Italian',
+    rus: 'Russian', ara: 'Arabic', hin: 'Hindi', tha: 'Thai',
+    vie: 'Vietnamese', ind: 'Indonesian', nld: 'Dutch', pol: 'Polish',
+    tur: 'Turkish', swe: 'Swedish', nor: 'Norwegian', dan: 'Danish',
+    fin: 'Finnish', ces: 'Czech', hun: 'Hungarian', ron: 'Romanian',
+    und: 'Unknown',
+  };
+
+  function getTrackLabel(track) {
+    if (track.title) return track.title;
+    if (track.language) return LANG_NAMES[track.language] || track.language.toUpperCase();
+    return `Track ${track.index + 1}`;
+  }
+
+  function renderAudioMenu() {
+    audioTrackList.innerHTML = '';
+    audioTracks.forEach((track, i) => {
+      const item = document.createElement('div');
+      item.className = 'audio-track-item' +
+        (i === currentAudioTrack ? ' active' : '') +
+        (i === audioMenuFocus ? ' focused' : '');
+      item.innerHTML = `<span class="track-check">${i === currentAudioTrack ? '✓' : ''}</span>${escHtml(getTrackLabel(track))}`;
+      item.addEventListener('click', () => selectAudioTrack(i));
+      audioTrackList.appendChild(item);
+    });
+  }
+
+  function openAudioMenu() {
+    if (audioTracks.length <= 1) return;
+    audioMenuFocus = currentAudioTrack;
+    renderAudioMenu();
+    audioOverlay.classList.add('open');
+    audioBtn.classList.add('menu-open');
+    clearTimeout(barTimer); // keep bar visible while menu is open
+    videoBar.classList.remove('hidden');
+  }
+
+  function closeAudioMenu() {
+    audioOverlay.classList.remove('open');
+    audioBtn.classList.remove('menu-open');
+  }
+
+  function selectAudioTrack(index) {
+    if (index === currentAudioTrack) { closeAudioMenu(); return; }
+
+    // Try native audioTracks API (may work on some webOS versions for MKV)
+    if (videoEl.audioTracks && videoEl.audioTracks.length > 1) {
+      for (let i = 0; i < videoEl.audioTracks.length; i++) {
+        videoEl.audioTracks[i].enabled = (i === index);
+      }
+      currentAudioTrack = index;
+      closeAudioMenu();
+      renderAudioMenu();
+      return;
+    }
+
+    // Fall back to server-side remux
+    const seekTo = Math.floor(videoEl.currentTime);
+    currentAudioTrack = index;
+    closeAudioMenu();
+    showBar();
+
+    clearInterval(posInterval);
+    videoEl.src = `${SERVER_URL}/video/${currentVideoId}/audio/${index}?t=${seekTo}`;
+    videoEl.addEventListener('loadedmetadata', function onSwitch() {
+      videoEl.removeEventListener('loadedmetadata', onSwitch);
+      videoEl.play().catch(() => {});
+      posInterval = setInterval(() => {
+        if (!videoEl.paused && currentVideoId) savePos(currentVideoId, videoEl.currentTime);
+      }, 5000);
+    });
+  }
+
+  function updateAudioButton() {
+    audioBtn.style.display = audioTracks.length > 1 ? 'inline-block' : 'none';
+  }
+
+  async function fetchAudioTracks(videoId) {
+    try {
+      const res = await fetch(`${SERVER_URL}/video/${videoId}/info`);
+      if (!res.ok) return;
+      const data = await res.json();
+      audioTracks = data.audioTracks || [];
+      updateAudioButton();
+    } catch (e) {
+      audioTracks = [];
+    }
+  }
+
+  audioBtn.addEventListener('click', () => {
+    audioOverlay.classList.contains('open') ? closeAudioMenu() : openAudioMenu();
+  });
+
   // ── Playback ────────────────────────────────────────────
 
   function playVideo(index) {
     const v = videos[index];
     focusedIndex = index;
     currentVideoId = v.id;
+    currentAudioTrack = 0;
+    closeAudioMenu();
+
+    // Use audio track info from the videos response; fetch lazily if missing
+    audioTracks = v.audioTracks || [];
+    updateAudioButton();
+    if (audioTracks.length === 0) fetchAudioTracks(v.id);
 
     videoEl.src = `${SERVER_URL}${v.videoUrl}`;
     document.getElementById('video-title').textContent = v.title;
@@ -897,6 +1075,10 @@
     clearInterval(posInterval);
     posInterval = null;
     currentVideoId = null;
+    closeAudioMenu();
+    audioTracks = [];
+    currentAudioTrack = 0;
+    audioBtn.style.display = 'none';
     videoEl.pause();
     videoEl.src = '';
     playerScreen.style.display = 'none';
@@ -996,8 +1178,29 @@
     if (inConfirm || inSettings) return; // let the dialog handle its own keys
 
     if (inPlayer) {
+      const menuOpen = audioOverlay.classList.contains('open');
+
+      if (menuOpen) {
+        if (e.key === 'Escape' || e.key === 'ArrowRight' || e.keyCode === 461) {
+          closeAudioMenu();
+        } else if (e.key === 'ArrowUp') {
+          audioMenuFocus = Math.max(0, audioMenuFocus - 1);
+          renderAudioMenu();
+        } else if (e.key === 'ArrowDown') {
+          audioMenuFocus = Math.min(audioTracks.length - 1, audioMenuFocus + 1);
+          renderAudioMenu();
+        } else if (e.key === 'Enter') {
+          selectAudioTrack(audioMenuFocus);
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
       if (e.keyCode === 461 || e.key === 'Escape') {
         history.back(); // pops the state pushed in playVideo → triggers popstate → backToGrid()
+      } else if (e.key === 'ArrowUp') {
+        openAudioMenu();
       } else if (e.key === 'Enter') {
         videoEl.paused ? videoEl.play() : videoEl.pause();
         showBar();
