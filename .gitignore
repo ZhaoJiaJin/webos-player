@@ -2,3 +2,8 @@
 .DS_Store
 *.ipk
 .claude
+node_modules/
+/server/cache.json
+/server/thumbnails/
+/server/private.txt
+/server/deleted.log
