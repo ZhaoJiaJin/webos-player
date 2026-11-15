@@ -102,6 +102,15 @@ ares-launch com.example.sambavideoapp
 - Converted streams restart on seeking, with resume positions and the progress bar using the original movie timeline. Video may briefly wait for the next keyframe after a seek.
 - Conversion requires FFmpeg with the AC3 encoder. On a Raspberry Pi 3B, benchmark your file first; conversion speed must exceed real time. Only audio is converted, but Blu-ray video bitrate can still exceed available disk/network throughput
 
+### Subtitles
+- External UTF-8 `.srt` and `.vtt` files are discovered beside the movie. Use the movie basename, optionally followed by language/labels: `Movie.mkv`, `Movie.en.srt`, `Movie.zh.forced.srt`.
+- Embedded text subtitles (SubRip, WebVTT, ASS/SSA, and MP4 timed text) are discovered on demand. The selected track is extracted to WebVTT and cached in `server/subtitle-cache/`; initial extraction of a large movie can take time.
+- Press **Down** during playback or click **CC** to open the subtitle menu. Up/Down navigates, OK selects, and Back closes the menu. Choose **Off** to disable subtitles.
+- The final menu row adjusts delay with Left/Right or the −/+ buttons in 0.5-second steps (±30 seconds). Positive delay makes subtitles appear later. Track choice and delay are remembered per movie on the TV.
+- Subtitles remain synchronized with the original movie timeline during seeking, resume, and audio conversion. Rendering uses plain text; advanced ASS styling and cue positioning are not preserved.
+- Image subtitles such as Blu-ray PGS and DVD VobSub are listed as unavailable. Add an external SRT/VTT alternative; video is never re-encoded to burn subtitles in.
+- Subtitle discovery/extraction failures do not stop video playback. Cache files are generated locally and ignored by Git.
+
 ### Private videos
 - Mark any video as private with the 🔒 button (top-left of card)
 - Private IDs stored in `server/private.txt`, one per line
@@ -123,6 +132,7 @@ ares-launch com.example.sambavideoapp
 | Back | Return to grid from player |
 | Left / Right (in player) | Seek ±10 seconds |
 | OK / Enter (in player) | Play / Pause |
+| Down (in player) | Open subtitle menu |
 | Double-scroll wheel | Next / previous page |
 | Double-click "Videos" | Toggle private mode |
 
@@ -131,6 +141,8 @@ ares-launch com.example.sambavideoapp
 | Endpoint | Description |
 |---|---|
 | `GET /videos` | Paginated video list. Params: `page`, `limit`, `orderBy`, `order`, `q`, `private` |
+| `GET /video/:id/subtitles` | List external and embedded subtitles with supported formats and language labels |
+| `GET /video/:id/subtitles/:trackId` | Serve a cached WebVTT conversion of the selected text track |
 | `GET /video/:id/info` | Audio track metadata |
 | `GET /video/:id/audio/:trackIndex?t=seconds` | Stream selected audio track in fragmented MP4; converts DTS/TrueHD to AC3 and copies video. Track index is zero-based among audio tracks. |
 | `GET /video/:id` | Stream a video (supports HTTP range requests) |
@@ -152,4 +164,4 @@ ares-launch com.example.sambavideoapp
 
 ## Tests
 
-Run `npm test` from `server/`. The playback tests require `ffmpeg` and `ffprobe`, including the `libx264`, `dca`, and `ac3` encoders for the generated sample. They check DTS-to-AC3 streaming, seek timestamps, invalid requests, and client resume/track switching.
+Run `npm test` from `server/`. The playback tests require `ffmpeg` and `ffprobe`, including the `libx264`, `dca`, and `ac3` encoders for the generated sample. They check DTS-to-AC3 streaming, seek timestamps, invalid requests, client resume/track switching, subtitle discovery/extraction/cache invalidation, and subtitle timing.

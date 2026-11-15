@@ -623,6 +623,29 @@
     #audio-track-btn:hover,
     #audio-track-btn.menu-open { color: #fff; background: rgba(255,255,255,0.12); }
 
+    #subtitle-text {
+      position: absolute; bottom: 12%; left: 8%; right: 8%; z-index: 5;
+      text-align: center; font-size: 2rem; line-height: 1.35; white-space: pre-line;
+      color: white; text-shadow: 0 2px 3px black, 2px 0 3px black, -2px 0 3px black;
+      pointer-events: none;
+    }
+    #subtitle-overlay {
+      position: absolute; bottom: 130px; right: 48px; z-index: 11;
+      display: none; background: rgba(12,12,12,.97); border: 1px solid #333;
+      border-radius: 8px; width: 390px; max-height: 65vh; overflow-y: auto;
+    }
+    #subtitle-overlay.open { display: block; }
+    #subtitle-status { color: #aaa; font-size: .85rem; padding: 8px 16px; }
+    #subtitle-btn { background: #222; color: white; border: 0; border-radius: 4px;
+      cursor: pointer; padding: 5px 10px; }
+    #subtitle-btn.menu-open { color: #e8621a; }
+    .subtitle-option { padding: 10px 16px; cursor: pointer; font-size: .9rem; }
+    .subtitle-option.focused { background: rgba(232,98,26,.25); }
+    .subtitle-option.active { color: #e8621a; }
+    .subtitle-option.unsupported { color: #777; }
+    #subtitle-delay { display: flex; align-items: center; justify-content: space-between; }
+    #subtitle-delay button { background: #333; color: white; border: 0;
+      border-radius: 4px; padding: 6px 12px; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -703,6 +726,17 @@
 <!-- Player screen -->
 <div id="player-screen">
   <video id="video-player"></video>
+  <div id="subtitle-text" aria-live="off"></div>
+  <div id="subtitle-overlay">
+    <div class="audio-menu-header">Subtitles · ↑↓ choose · OK select</div>
+    <div id="subtitle-status"></div>
+    <div id="subtitle-list"></div>
+    <div id="subtitle-delay" class="subtitle-option">
+      <button id="subtitle-earlier" aria-label="Show subtitles earlier">−</button>
+      <span id="subtitle-delay-label"></span>
+      <button id="subtitle-later" aria-label="Show subtitles later">+</button>
+    </div>
+  </div>
   <div id="audio-track-overlay">
     <div id="audio-track-menu">
       <div class="audio-menu-header">Audio Track</div>
@@ -715,11 +749,13 @@
       <span id="play-state">▶</span>
       <div id="progress-wrap"><div id="progress-track"><div id="progress-bar"></div></div></div>
       <span id="video-time"></span>
+      <button id="subtitle-btn" title="Subtitles (↓)">CC</button>
       <button id="audio-track-btn" title="Audio track (↑)">🔊</button>
     </div>
   </div>
 </div>
 
+<script src="subtitles.js"></script>
 <script>
   const COLS = 4;
   const PAGE_SIZE = 12;
@@ -784,10 +820,12 @@
       onPlaybackMetadata = null;
       if (!usingAudioStream) videoEl.currentTime = time;
       playbackLoadingTime = null;
+      updateSubtitles();
       if (!paused) videoEl.play().catch(() => {});
     };
     videoEl.addEventListener('loadedmetadata', onPlaybackMetadata);
     videoEl.src = SERVER_URL + source;
+    updateSubtitles();
   }
 
   function seekPlayback(time) {
@@ -1017,6 +1055,7 @@
   }
 
   function openAudioMenu() {
+    closeSubtitleMenu();
     if (audioTracks.length <= 1) return;
     audioMenuFocus = currentAudioTrack;
     renderAudioMenu();
@@ -1058,11 +1097,149 @@
     audioOverlay.classList.contains('open') ? closeAudioMenu() : openAudioMenu();
   });
 
+  // ── Subtitles: text cues follow the original movie timeline ──
+  const subtitleOverlay = document.getElementById('subtitle-overlay');
+  const subtitleText = document.getElementById('subtitle-text');
+  const subtitleBtn = document.getElementById('subtitle-btn');
+  let subtitleTracks = [];
+  let subtitleCues = [];
+  let selectedSubtitle = null;
+  let subtitleDelay = 0;
+  let subtitleFocus = 0;
+  let subtitleRequest = 0;
+  let subtitleTimer = null;
+
+  function updateSubtitles() {
+    subtitleText.textContent = playbackLoadingTime !== null || pendingSeek !== null
+      ? '' : SubtitleTools.textAt(subtitleCues, playbackTime(), subtitleDelay);
+  }
+
+  function closeSubtitleMenu() {
+    subtitleOverlay.classList.remove('open');
+    subtitleBtn.classList.remove('menu-open');
+  }
+
+  function subtitleLabel(track) {
+    const aliases = { en: 'eng', zh: 'zho', ja: 'jpn', ko: 'kor', fr: 'fra',
+      de: 'deu', es: 'spa', it: 'ita', pt: 'por', ru: 'rus', ar: 'ara' };
+    return getTrackLabel({ ...track,
+      title: track.title === track.language ? '' : track.title,
+      language: aliases[track.language] || track.language });
+  }
+
+  function renderSubtitleMenu() {
+    const list = document.getElementById('subtitle-list');
+    list.innerHTML = '';
+    [null, ...subtitleTracks].forEach((track, index) => {
+      const row = document.createElement('div');
+      const active = (track ? track.id : null) === selectedSubtitle;
+      row.className = 'subtitle-option' + (index === subtitleFocus ? ' focused' : '') +
+        (active ? ' active' : '') + (track && !track.supported ? ' unsupported' : '');
+      row.textContent = (active ? '✓ ' : '') + (track
+        ? `${subtitleLabel(track)} (${track.source})${track.forced ? ' · forced' : ''}${track.supported ? '' : ' · image format unavailable'}`
+        : 'Off');
+      row.addEventListener('click', () => selectSubtitle(track));
+      list.appendChild(row);
+    });
+    const delayRow = document.getElementById('subtitle-delay');
+    delayRow.classList.toggle('focused', subtitleFocus === subtitleTracks.length + 1);
+    document.getElementById('subtitle-delay-label').textContent =
+      `Delay: ${subtitleDelay > 0 ? '+' : ''}${subtitleDelay.toFixed(1)}s (← →)`;
+    const focused = subtitleOverlay.querySelector('.focused');
+    if (focused) focused.scrollIntoView({ block: 'nearest' });
+  }
+
+  function openSubtitleMenu() {
+    closeAudioMenu();
+    subtitleFocus = Math.max(0, subtitleTracks.findIndex(t => t.id === selectedSubtitle) + 1);
+    subtitleOverlay.classList.add('open');
+    subtitleBtn.classList.add('menu-open');
+    renderSubtitleMenu();
+    showBar();
+  }
+
+  function changeSubtitleDelay(delta) {
+    subtitleDelay = Math.round(Math.max(-30, Math.min(30, subtitleDelay + delta)) * 10) / 10;
+    localStorage.setItem(`subtitleDelay_${currentVideoId}`, String(subtitleDelay));
+    renderSubtitleMenu();
+    updateSubtitles();
+  }
+
+  async function selectSubtitle(track) {
+    if (track && !track.supported) {
+      document.getElementById('subtitle-status').textContent = 'Use an external SRT/VTT file for image subtitles.';
+      return;
+    }
+    const request = ++subtitleRequest;
+    const generation = playbackGeneration;
+    selectedSubtitle = track ? track.id : null;
+    subtitleCues = [];
+    clearInterval(subtitleTimer);
+    subtitleTimer = null;
+    updateSubtitles();
+    localStorage.setItem(`subtitle_${currentVideoId}`, selectedSubtitle || 'off');
+    renderSubtitleMenu();
+    document.getElementById('subtitle-status').textContent = track ? 'Loading subtitles… First extraction may take a while.' : '';
+    if (!track) return;
+    try {
+      const response = await fetch(SERVER_URL + track.url);
+      if (!response.ok) throw new Error('Could not load subtitles');
+      const text = await response.text();
+      if (generation !== playbackGeneration || request !== subtitleRequest) return;
+      subtitleCues = SubtitleTools.parse(text);
+      document.getElementById('subtitle-status').textContent = subtitleCues.length ? '' : 'This track has no text cues.';
+      subtitleTimer = setInterval(updateSubtitles, 100);
+      updateSubtitles();
+    } catch (error) {
+      if (generation !== playbackGeneration || request !== subtitleRequest) return;
+      document.getElementById('subtitle-status').textContent = error.message;
+    }
+  }
+
+  async function loadSubtitleList(videoId, generation) {
+    document.getElementById('subtitle-status').textContent = 'Finding subtitles…';
+    try {
+      const response = await fetch(`${SERVER_URL}/video/${videoId}/subtitles`);
+      if (!response.ok) throw new Error('Could not discover subtitles');
+      const data = await response.json();
+      if (generation !== playbackGeneration) return;
+      subtitleTracks = data.subtitles || [];
+      document.getElementById('subtitle-status').textContent = subtitleTracks.length ? '' : 'No subtitles found. Add a matching SRT/VTT beside the video.';
+      renderSubtitleMenu();
+      const saved = localStorage.getItem(`subtitle_${videoId}`);
+      const track = subtitleTracks.find(item => item.id === saved && item.supported);
+      if (track && selectedSubtitle === null) selectSubtitle(track);
+    } catch (error) {
+      if (generation === playbackGeneration) document.getElementById('subtitle-status').textContent = error.message;
+    }
+  }
+
+  function resetSubtitles() {
+    ++subtitleRequest;
+    clearInterval(subtitleTimer);
+    subtitleTimer = null;
+    subtitleCues = [];
+    subtitleTracks = [];
+    selectedSubtitle = null;
+    subtitleText.textContent = '';
+    closeSubtitleMenu();
+  }
+
+  subtitleBtn.addEventListener('click', () => {
+    subtitleOverlay.classList.contains('open') ? closeSubtitleMenu() : openSubtitleMenu();
+  });
+  document.getElementById('subtitle-earlier').addEventListener('click', () => changeSubtitleDelay(-0.5));
+  document.getElementById('subtitle-later').addEventListener('click', () => changeSubtitleDelay(0.5));
+
   // ── Playback ────────────────────────────────────────────
 
   async function playVideo(index) {
     const v = videos[index];
     const generation = ++playbackGeneration;
+    resetSubtitles();
+    const savedDelay = Number(localStorage.getItem(`subtitleDelay_${v.id}`));
+    subtitleDelay = Number.isFinite(savedDelay) ? Math.max(-30, Math.min(30, savedDelay)) : 0;
+    loadSubtitleList(v.id, generation);
     focusedIndex = index;
     currentVideoId = v.id;
     currentAudioTrack = 0;
@@ -1098,6 +1275,7 @@
 
   function backToGrid() {
     ++playbackGeneration;
+    resetSubtitles();
     clearTimeout(seekTimer);
     if (onPlaybackMetadata) videoEl.removeEventListener('loadedmetadata', onPlaybackMetadata);
     onPlaybackMetadata = null;
@@ -1200,7 +1378,9 @@
   function showBar() {
     videoBar.classList.remove('hidden');
     clearTimeout(barTimer);
-    barTimer = setTimeout(() => videoBar.classList.add('hidden'), 3000);
+    barTimer = setTimeout(() => {
+      if (!subtitleOverlay.classList.contains('open') && !audioOverlay.classList.contains('open')) videoBar.classList.add('hidden');
+    }, 3000);
   }
 
   videoEl.addEventListener('mousemove', showBar);
@@ -1219,6 +1399,21 @@
     if (inConfirm || inSettings) return; // let the dialog handle its own keys
 
     if (inPlayer) {
+      if (subtitleOverlay.classList.contains('open')) {
+        if (e.key === 'Escape' || e.keyCode === 461) closeSubtitleMenu();
+        else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          subtitleFocus = Math.max(0, Math.min(subtitleTracks.length + 1,
+            subtitleFocus + (e.key === 'ArrowDown' ? 1 : -1)));
+          renderSubtitleMenu();
+        } else if (subtitleFocus === subtitleTracks.length + 1 && ['ArrowLeft', 'ArrowRight'].includes(e.key)) {
+          changeSubtitleDelay(e.key === 'ArrowRight' ? 0.5 : -0.5);
+        } else if (e.key === 'Enter' && subtitleFocus <= subtitleTracks.length) {
+          selectSubtitle(subtitleFocus === 0 ? null : subtitleTracks[subtitleFocus - 1]);
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       const menuOpen = audioOverlay.classList.contains('open');
 
       if (menuOpen) {
@@ -1240,6 +1435,8 @@
 
       if (e.keyCode === 461 || e.key === 'Escape') {
         history.back(); // pops the state pushed in playVideo → triggers popstate → backToGrid()
+      } else if (e.key === 'ArrowDown') {
+        openSubtitleMenu();
       } else if (e.key === 'ArrowUp') {
         openAudioMenu();
       } else if (e.key === 'Enter') {

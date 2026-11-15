@@ -208,6 +208,12 @@ function logDeletion(video) {
   console.log(line.trim());
 }
 
+const subtitles = require('./subtitles')({
+  mediaRoot: MEDIA_ROOT,
+  cacheDir: path.join(__dirname, 'subtitle-cache'),
+  getMetadata,
+});
+
 // --- Routes ---
 
 app.get('/status', (_req, res) => {
@@ -305,6 +311,30 @@ app.get('/video/:id', (req, res) => {
       'Accept-Ranges': 'bytes',
     });
     fs.createReadStream(filePath).pipe(res);
+  }
+});
+
+app.get('/video/:id/subtitles', async (req, res) => {
+  const video = videoCache.find(v => v.id === req.params.id);
+  if (!video) return res.status(404).json({ error: 'Not found' });
+  try {
+    res.json({ subtitles: await subtitles.list(video) });
+  } catch (error) {
+    console.error('Subtitle discovery failed:', error.message);
+    res.status(500).json({ error: 'Could not read subtitles' });
+  }
+});
+
+app.get('/video/:id/subtitles/:trackId', async (req, res) => {
+  const video = videoCache.find(v => v.id === req.params.id);
+  if (!video) return res.status(404).json({ error: 'Not found' });
+  try {
+    const file = await subtitles.file(video, req.params.trackId);
+    if (!file) return res.status(404).json({ error: 'Subtitle not found' });
+    if (!res.destroyed) res.type('text/vtt').sendFile(file);
+  } catch (error) {
+    console.error('Subtitle conversion failed:', error.message);
+    if (!res.destroyed) res.status(500).json({ error: 'Could not load subtitles; use an external UTF-8 SRT or VTT file' });
   }
 });
 

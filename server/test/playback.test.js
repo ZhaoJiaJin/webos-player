@@ -18,7 +18,7 @@ test('audio endpoint converts DTS, copies video, seeks, and validates requests',
   const routes = {};
   const app = { use() {}, get(route, handler) { routes[route] = handler; }, post() {}, delete() {} };
   const context = vm.createContext({
-    require: name => name === 'express' ? () => app : require(name),
+    require: name => name === 'express' ? () => app : name === './subtitles' ? require('../subtitles') : require(name),
     __dirname: dir, process: { env: { MEDIA_ROOT: dir } }, console,
   });
   const source = fs.readFileSync(path.join(__dirname, '../index.js'), 'utf8');
@@ -64,7 +64,7 @@ test('client selects conversion automatically and preserves the movie timeline',
       listeners: {}, currentTime: 0, paused: false,
       addEventListener(name, fn) { this.listeners[name] = fn; },
       removeEventListener(name, fn) { if (this.listeners[name] === fn) delete this.listeners[name]; },
-      querySelectorAll() { return []; }, focus() {}, pause() {}, load() {},
+      appendChild() {}, scrollIntoView() {}, querySelector() { return null; }, querySelectorAll() { return []; }, focus() {}, pause() {}, load() {},
       removeAttribute(name) { delete this[name]; }, play() { return Promise.resolve(); },
     });
     return elements.get(id);
@@ -73,7 +73,9 @@ test('client selects conversion automatically and preserves the movie timeline',
   let nextTimer = 0;
   const positions = new Map();
   const context = vm.createContext({
-    document: { getElementById: element, querySelector: element, addEventListener() {} },
+    document: { getElementById: element, querySelector: element, createElement: () => element(Symbol()), addEventListener() {} },
+    fetch: async () => ({ ok: true, json: async () => ({ subtitles: [] }),
+      text: async () => 'WEBVTT\n\n00:02:14.000 --> 00:02:16.000\nHello\n' }),
     window: { addEventListener() {} }, history: { pushState() {} },
     localStorage: { getItem: key => positions.get(key), setItem: (key, value) => positions.set(key, value) },
     setTimeout: fn => { timers.set(++nextTimer, fn); return nextTimer; },
@@ -82,6 +84,7 @@ test('client selects conversion automatically and preserves the movie timeline',
   });
   const html = fs.readFileSync(path.join(__dirname, '../../webos-app/index.html'), 'utf8');
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/fetchPage\(1\);\s*$/, '');
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../webos-app/subtitles.js'), 'utf8'), context);
   vm.runInContext(script, context);
   positions.set('pos_movie', '120');
   await vm.runInContext(`videos = [{ id: 'movie', title: 'Test', duration: 600,
@@ -91,6 +94,15 @@ test('client selects conversion automatically and preserves the movie timeline',
   video.listeners.loadedmetadata();
   video.currentTime = 15;
   assert.equal(vm.runInContext('playbackTime()', context), 135);
+  await vm.runInContext(`selectSubtitle({ id: 'english', title: 'English', supported: true, url: '/subtitles' })`, context);
+  assert.equal(element('subtitle-text').textContent, 'Hello');
+  vm.runInContext('subtitleDelay = 2; updateSubtitles();', context);
+  assert.equal(element('subtitle-text').textContent, '');
+  vm.runInContext('subtitleDelay = 0;', context);
+  await vm.runInContext('selectSubtitle(null)', context);
+  assert.equal(element('subtitle-text').textContent, '');
+  await vm.runInContext(`selectSubtitle({ id: 'pgs', supported: false })`, context);
+  assert.match(element('subtitle-status').textContent, /external SRT/);
   vm.runInContext('seekPlayback(playbackTime() + 10); seekPlayback(playbackTime() + 10);', context);
   assert.equal(vm.runInContext('playbackTime()', context), 155);
   for (const fn of [...timers.values()]) fn();
