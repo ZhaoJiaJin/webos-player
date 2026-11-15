@@ -97,6 +97,10 @@ ares-launch com.example.sambavideoapp
 - Back button returns to the grid (no exit dialog)
 - Left/Right arrows seek ±10 seconds
 - OK/Enter toggles play/pause
+- DTS / DTS-HD and Dolby TrueHD audio automatically converts to AC3 5.1 at 640 kbps on the server; video is copied without re-encoding
+- Other audio codecs continue to play directly; switching tracks remuxes the selected track and converts it if necessary
+- Converted streams restart on seeking, with resume positions and the progress bar using the original movie timeline. Video may briefly wait for the next keyframe after a seek.
+- Conversion requires FFmpeg with the AC3 encoder. On a Raspberry Pi 3B, benchmark your file first; conversion speed must exceed real time. Only audio is converted, but Blu-ray video bitrate can still exceed available disk/network throughput
 
 ### Private videos
 - Mark any video as private with the 🔒 button (top-left of card)
@@ -127,6 +131,8 @@ ares-launch com.example.sambavideoapp
 | Endpoint | Description |
 |---|---|
 | `GET /videos` | Paginated video list. Params: `page`, `limit`, `orderBy`, `order`, `q`, `private` |
+| `GET /video/:id/info` | Audio track metadata |
+| `GET /video/:id/audio/:trackIndex?t=seconds` | Stream selected audio track in fragmented MP4; converts DTS/TrueHD to AC3 and copies video. Track index is zero-based among audio tracks. |
 | `GET /video/:id` | Stream a video (supports HTTP range requests) |
 | `GET /thumbnails/:id.jpg` | Serve a thumbnail |
 | `GET /scan` | Trigger a synchronous rescan; returns when complete |
@@ -143,3 +149,7 @@ ares-launch com.example.sambavideoapp
 | `thumbnails/` | Generated thumbnail images |
 | `private.txt` | Private video IDs (one per line) |
 | `deleted.log` | Deletion audit log |
+
+## Tests
+
+Run `npm test` from `server/`. The playback tests require `ffmpeg` and `ffprobe`, including the `libx264`, `dca`, and `ac3` encoders for the generated sample. They check DTS-to-AC3 streaming, seek timestamps, invalid requests, and client resume/track switching.

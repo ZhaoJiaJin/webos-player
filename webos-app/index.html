@@ -751,6 +751,55 @@
   let pendingDeleteIndex = null;
   let currentVideoId = null;
   let posInterval = null;
+  let playbackOffset = 0;
+  let playbackLoadingTime = null;
+  let playbackDuration = 0;
+  let usingAudioStream = false;
+  let playbackGeneration = 0;
+  let seekTimer = null;
+  let pendingSeek = null;
+  let onPlaybackMetadata = null;
+
+  function playbackTime() {
+    if (pendingSeek !== null) return pendingSeek;
+    if (playbackLoadingTime !== null) return playbackLoadingTime;
+    return playbackOffset + videoEl.currentTime;
+  }
+
+  function needsAudioConversion(track) {
+    return track && ['dts', 'truehd'].includes(track.codec);
+  }
+
+  function loadPlayback(time, paused = false) {
+    clearTimeout(seekTimer);
+    pendingSeek = null;
+    if (onPlaybackMetadata) videoEl.removeEventListener('loadedmetadata', onPlaybackMetadata);
+    playbackLoadingTime = time;
+    playbackOffset = usingAudioStream ? time : 0;
+    const source = usingAudioStream
+      ? `/video/${currentVideoId}/audio/${currentAudioTrack}?t=${time}`
+      : `/video/${currentVideoId}`;
+    onPlaybackMetadata = () => {
+      videoEl.removeEventListener('loadedmetadata', onPlaybackMetadata);
+      onPlaybackMetadata = null;
+      if (!usingAudioStream) videoEl.currentTime = time;
+      playbackLoadingTime = null;
+      if (!paused) videoEl.play().catch(() => {});
+    };
+    videoEl.addEventListener('loadedmetadata', onPlaybackMetadata);
+    videoEl.src = SERVER_URL + source;
+  }
+
+  function seekPlayback(time) {
+    const target = Math.max(0, Math.min(Math.max(0, playbackDuration - 0.1), time));
+    if (usingAudioStream) {
+      const paused = videoEl.paused;
+      pendingSeek = target;
+      clearTimeout(seekTimer);
+      seekTimer = setTimeout(() => loadPlayback(target, paused), 250);
+    } else videoEl.currentTime = target;
+    showBar();
+  }
 
   let audioTracks = [];
   let currentAudioTrack = 0;
@@ -985,32 +1034,13 @@
   function selectAudioTrack(index) {
     if (index === currentAudioTrack) { closeAudioMenu(); return; }
 
-    // Try native audioTracks API (may work on some webOS versions for MKV)
-    if (videoEl.audioTracks && videoEl.audioTracks.length > 1) {
-      for (let i = 0; i < videoEl.audioTracks.length; i++) {
-        videoEl.audioTracks[i].enabled = (i === index);
-      }
-      currentAudioTrack = index;
-      closeAudioMenu();
-      renderAudioMenu();
-      return;
-    }
-
-    // Fall back to server-side remux
-    const seekTo = Math.floor(videoEl.currentTime);
+    const time = playbackTime();
+    const paused = videoEl.paused;
     currentAudioTrack = index;
+    usingAudioStream = true;
     closeAudioMenu();
     showBar();
-
-    clearInterval(posInterval);
-    videoEl.src = `${SERVER_URL}/video/${currentVideoId}/audio/${index}?t=${seekTo}`;
-    videoEl.addEventListener('loadedmetadata', function onSwitch() {
-      videoEl.removeEventListener('loadedmetadata', onSwitch);
-      videoEl.play().catch(() => {});
-      posInterval = setInterval(() => {
-        if (!videoEl.paused && currentVideoId) savePos(currentVideoId, videoEl.currentTime);
-      }, 5000);
-    });
+    loadPlayback(time, paused);
   }
 
   function updateAudioButton() {
@@ -1018,15 +1048,10 @@
   }
 
   async function fetchAudioTracks(videoId) {
-    try {
-      const res = await fetch(`${SERVER_URL}/video/${videoId}/info`);
-      if (!res.ok) return;
-      const data = await res.json();
-      audioTracks = data.audioTracks || [];
-      updateAudioButton();
-    } catch (e) {
-      audioTracks = [];
-    }
+    const res = await fetch(`${SERVER_URL}/video/${videoId}/info`);
+    if (!res.ok) throw new Error('Could not read audio tracks');
+    const data = await res.json();
+    return data.audioTracks || [];
   }
 
   audioBtn.addEventListener('click', () => {
@@ -1035,42 +1060,49 @@
 
   // ── Playback ────────────────────────────────────────────
 
-  function playVideo(index) {
+  async function playVideo(index) {
     const v = videos[index];
+    const generation = ++playbackGeneration;
     focusedIndex = index;
     currentVideoId = v.id;
     currentAudioTrack = 0;
+    playbackDuration = v.duration;
+    playbackLoadingTime = 0;
+    playbackOffset = 0;
+    pendingSeek = null;
     closeAudioMenu();
-
-    // Use audio track info from the videos response; fetch lazily if missing
-    audioTracks = v.audioTracks || [];
-    updateAudioButton();
-    if (audioTracks.length === 0) fetchAudioTracks(v.id);
-
-    videoEl.src = `${SERVER_URL}${v.videoUrl}`;
-    document.getElementById('video-title').textContent = v.title;
     playerScreen.style.display = 'flex';
     gridScreen.style.display = 'none';
-    showBar();
+    document.getElementById('video-title').textContent = v.title;
     history.pushState({ screen: 'player' }, '');
-
-    videoEl.addEventListener('loadedmetadata', function onMeta() {
-      videoEl.removeEventListener('loadedmetadata', onMeta);
+    try {
+      const tracks = v.audioTracks && v.audioTracks.length
+        ? v.audioTracks : await fetchAudioTracks(v.id);
+      if (generation !== playbackGeneration) return;
+      audioTracks = tracks;
+      updateAudioButton();
+      usingAudioStream = needsAudioConversion(audioTracks[0]);
       const saved = loadPos(v.id);
-      if (saved > 0 && saved < videoEl.duration - RESUME_THRESHOLD) {
-        videoEl.currentTime = saved;
-      }
-      videoEl.play().catch(() => {});
+      loadPlayback(saved > 0 && saved < playbackDuration - RESUME_THRESHOLD ? saved : 0);
+      showBar();
       clearInterval(posInterval);
       posInterval = setInterval(() => {
-        if (!videoEl.paused && currentVideoId) savePos(currentVideoId, videoEl.currentTime);
+        if (!videoEl.paused && currentVideoId) savePos(currentVideoId, playbackTime());
       }, 5000);
-    });
+    } catch (error) {
+      if (generation !== playbackGeneration) return;
+      alert(`Playback failed: ${error.message}`);
+      history.back();
+    }
   }
 
   function backToGrid() {
-    if (currentVideoId && videoEl.currentTime > 0) {
-      savePos(currentVideoId, videoEl.currentTime);
+    ++playbackGeneration;
+    clearTimeout(seekTimer);
+    if (onPlaybackMetadata) videoEl.removeEventListener('loadedmetadata', onPlaybackMetadata);
+    onPlaybackMetadata = null;
+    if (currentVideoId && playbackTime() > 0) {
+      savePos(currentVideoId, playbackTime());
     }
     clearInterval(posInterval);
     posInterval = null;
@@ -1080,7 +1112,11 @@
     currentAudioTrack = 0;
     audioBtn.style.display = 'none';
     videoEl.pause();
-    videoEl.src = '';
+    videoEl.removeAttribute('src');
+    videoEl.load();
+    playbackOffset = 0;
+    playbackLoadingTime = null;
+    pendingSeek = null;
     playerScreen.style.display = 'none';
     gridScreen.style.display = 'flex';
     focusCard(focusedIndex);
@@ -1105,19 +1141,24 @@
 
   function updateTimeDisplay() {
     if (isSeeking) return;
-    const cur = videoEl.currentTime;
-    const dur = videoEl.duration || 0;
+    const cur = playbackTime();
+    const dur = playbackDuration;
     document.getElementById('video-time').textContent =
       `${formatTime(cur)} / ${formatTime(dur)}`;
     document.getElementById('progress-bar').style.width =
       dur ? `${(cur / dur) * 100}%` : '0%';
   }
 
+  videoEl.addEventListener('error', () => {
+    if (currentVideoId && videoEl.getAttribute('src')) {
+      alert('Playback failed. Check the server FFmpeg log and media codec support.');
+    }
+  });
   videoEl.addEventListener('timeupdate', updateTimeDisplay);
   videoEl.addEventListener('play',  () => { document.getElementById('play-state').textContent = '⏸'; });
   videoEl.addEventListener('pause', () => {
     document.getElementById('play-state').textContent = '▶';
-    if (currentVideoId && videoEl.currentTime > 0) savePos(currentVideoId, videoEl.currentTime);
+    if (currentVideoId && playbackTime() > 0) savePos(currentVideoId, playbackTime());
   });
   videoEl.addEventListener('ended', () => {
     if (currentVideoId) clearPos(currentVideoId);
@@ -1133,7 +1174,7 @@
   function seekTo(e) {
     const rect = progressWrap.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    videoEl.currentTime = ratio * (videoEl.duration || 0);
+    seekPlayback(ratio * playbackDuration);
     progressBar.style.width = `${ratio * 100}%`;
     showBar();
   }
@@ -1205,10 +1246,10 @@
         videoEl.paused ? videoEl.play() : videoEl.pause();
         showBar();
       } else if (e.key === 'ArrowRight') {
-        videoEl.currentTime = Math.min(videoEl.duration, videoEl.currentTime + 10);
+        seekPlayback(playbackTime() + 10);
         showBar();
       } else if (e.key === 'ArrowLeft') {
-        videoEl.currentTime = Math.max(0, videoEl.currentTime - 10);
+        seekPlayback(playbackTime() - 10);
         showBar();
       } else {
         showBar();

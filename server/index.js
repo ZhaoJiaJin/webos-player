@@ -340,41 +340,69 @@ app.get('/video/:id/info', async (req, res) => {
   res.json({ audioTracks });
 });
 
-app.get('/video/:id/audio/:trackIndex', (req, res) => {
+app.get('/video/:id/audio/:trackIndex', async (req, res) => {
   const video = videoCache.find(v => v.id === req.params.id);
   if (!video) return res.status(404).send('Not found');
 
   const filePath = path.join(MEDIA_ROOT, video.filePath);
   if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
 
-  const trackIndex = parseInt(req.params.trackIndex, 10);
-  if (isNaN(trackIndex) || trackIndex < 0) return res.status(400).send('Invalid track index');
+  const trackIndex = Number(req.params.trackIndex);
+  const startTime = req.query.t === undefined ? 0 : Number(req.query.t);
+  if (!Number.isInteger(trackIndex) || trackIndex < 0) return res.status(400).send('Invalid track index');
+  if (!Number.isFinite(startTime) || startTime < 0 || startTime >= video.duration) {
+    return res.status(400).send('Invalid start time');
+  }
 
-  const startTime = parseFloat(req.query.t) || 0;
+  let tracks = metaCache[video.id]?.audioTracks;
+  if (!Array.isArray(tracks)) {
+    const probe = await getMetadata(filePath);
+    if (!probe) return res.status(500).send('Could not read audio tracks');
+    tracks = (probe.streams || []).filter(s => s.codec_type === 'audio')
+      .map(s => ({ codec: s.codec_name || '' }));
+  }
+  if (trackIndex >= tracks.length) return res.status(400).send('Audio track not found');
+  if (res.destroyed) return;
 
+  const transcode = ['dts', 'truehd'].includes(tracks[trackIndex].codec);
   const args = [
+    '-nostdin', '-v', 'error',
     '-ss', String(startTime),
     '-i', filePath,
+    // Drop packets before the requested time after the fast input seek.
+    // Copied video resumes at the next keyframe; audio keeps the movie timeline.
+    '-ss', '0',
     '-map', '0:v:0',
     '-map', `0:a:${trackIndex}`,
-    '-c', 'copy',
+    '-c:v', 'copy',
+    '-c:a', transcode ? 'ac3' : 'copy',
+    ...(transcode ? ['-b:a', '640k', '-ac', '6'] : []),
+    '-avoid_negative_ts', 'make_zero',
     '-f', 'mp4',
-    '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+    '-movflags', 'frag_keyframe+delay_moov+default_base_moof',
     'pipe:1',
   ];
 
-  res.writeHead(200, {
-    'Content-Type': 'video/mp4',
-    'Transfer-Encoding': 'chunked',
-    'Cache-Control': 'no-cache',
-  });
-
+  res.set({ 'Content-Type': 'video/mp4', 'Cache-Control': 'no-cache' });
   const proc = spawn('ffmpeg', args);
-  proc.stdout.pipe(res);
-  proc.stderr.on('data', () => {});
-
-  req.on('close', () => proc.kill('SIGTERM'));
-  proc.on('error', () => { if (!res.writableEnded) res.end(); });
+  let errorOutput = '';
+  proc.stderr.on('data', chunk => { errorOutput = (errorOutput + chunk).slice(-4096); });
+  proc.stdout.pipe(res, { end: false });
+  res.on('close', () => proc.kill('SIGTERM'));
+  proc.stdout.on('error', () => proc.kill('SIGTERM'));
+  proc.on('error', error => {
+    console.error('Audio conversion failed:', error.message);
+    if (!res.headersSent) res.status(500).send('Audio conversion failed');
+    else res.destroy();
+  });
+  proc.on('close', code => {
+    if (res.destroyed || res.writableEnded) return;
+    if (code !== 0) {
+      console.error('FFmpeg failed:', errorOutput);
+      if (!res.headersSent) res.status(500).send('Audio conversion failed');
+      else res.destroy();
+    } else res.end();
+  });
 });
 
 app.delete('/video/:id', (req, res) => {
