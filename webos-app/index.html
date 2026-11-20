@@ -387,7 +387,9 @@
       transition: opacity 0.4s;
     }
 
-    #video-bar.hidden { opacity: 0; }
+    #video-bar.hidden { opacity: 0; visibility: hidden; }
+
+    #video-controls button { pointer-events: auto; }
 
     #video-title {
       font-size: 1.2rem;
@@ -1572,6 +1574,7 @@
   }
 
   videoEl.addEventListener('mousemove', showBar);
+  videoBar.addEventListener('mousemove', showBar);
   videoEl.addEventListener('click', () => {
     videoEl.paused ? videoEl.play() : videoEl.pause();
     showBar();
