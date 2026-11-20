@@ -214,7 +214,10 @@ const subtitles = require('./subtitles')({
   getMetadata,
 });
 
-const onlineSubtitles = require('./opensubtitles')({ mediaRoot: MEDIA_ROOT });
+const onlineSubtitles = require('./opensubtitles')({
+  mediaRoot: MEDIA_ROOT,
+  env: require('./config')(path.join(__dirname, 'opensubtitles.json'), process.env),
+});
 
 // --- Routes ---
 

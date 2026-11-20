@@ -33,7 +33,7 @@ module.exports = function createOpenSubtitles({ mediaRoot, env = process.env, fe
   const userAgent = env.OPENSUBTITLES_USER_AGENT || 'WebOSPlayer v1.0';
 
   function configured() {
-    if (!env.OPENSUBTITLES_API_KEY) throw fail('Set OPENSUBTITLES_API_KEY on the server to enable online subtitles.', 503);
+    if (!env.OPENSUBTITLES_API_KEY) throw fail('Set apiKey in server/opensubtitles.json or OPENSUBTITLES_API_KEY on the server to enable online subtitles.', 503);
     if (!fetchImpl) throw fail('Online subtitles require Node.js 18 or newer on the server.', 503);
     if (Boolean(env.OPENSUBTITLES_USERNAME) !== Boolean(env.OPENSUBTITLES_PASSWORD)) {
       throw fail('Set both OPENSUBTITLES_USERNAME and OPENSUBTITLES_PASSWORD, or neither.', 503);
