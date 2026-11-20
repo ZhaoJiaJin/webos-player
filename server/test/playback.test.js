@@ -18,7 +18,7 @@ test('audio endpoint converts DTS, copies video, seeks, and validates requests',
   const routes = {};
   const app = { use() {}, get(route, handler) { routes[route] = handler; }, post() {}, delete() {} };
   const context = vm.createContext({
-    require: name => name === 'express' ? () => app : name === './subtitles' ? require('../subtitles') : require(name),
+    require: name => name === 'express' ? () => app : name.startsWith('./') ? require(path.join(__dirname, '..', name)) : require(name),
     __dirname: dir, process: { env: { MEDIA_ROOT: dir } }, console,
   });
   const source = fs.readFileSync(path.join(__dirname, '../index.js'), 'utf8');
@@ -64,7 +64,7 @@ test('client selects conversion automatically and preserves the movie timeline',
       listeners: {}, currentTime: 0, paused: false,
       addEventListener(name, fn) { this.listeners[name] = fn; },
       removeEventListener(name, fn) { if (this.listeners[name] === fn) delete this.listeners[name]; },
-      appendChild() {}, scrollIntoView() {}, querySelector() { return null; }, querySelectorAll() { return []; }, focus() {}, pause() {}, load() {},
+      children: [], appendChild(child) { this.children.push(child); }, scrollIntoView() {}, querySelector() { return null; }, querySelectorAll() { return []; }, focus() {}, pause() {}, load() {},
       removeAttribute(name) { delete this[name]; }, play() { return Promise.resolve(); },
     });
     return elements.get(id);
@@ -72,10 +72,17 @@ test('client selects conversion automatically and preserves the movie timeline',
   const timers = new Map();
   let nextTimer = 0;
   const positions = new Map();
+  const fetchRequests = [];
   const context = vm.createContext({
     document: { getElementById: element, querySelector: element, createElement: () => element(Symbol()), addEventListener() {} },
-    fetch: async () => ({ ok: true, json: async () => ({ subtitles: [] }),
-      text: async () => 'WEBVTT\n\n00:02:14.000 --> 00:02:16.000\nHello\n' }),
+    fetch: async (url, options) => {
+      fetchRequests.push({ url, options });
+      const track = { id: 'downloaded-101', language: 'en', title: 'English release', supported: true, source: 'external', url: '/downloaded.vtt' };
+      return { ok: true, json: async () => url.includes('subtitle-search?')
+        ? { results: [{ fileId: 101, language: 'en', release: 'Movie BluRay', fileName: 'movie.srt', hashMatch: true, downloads: 50 }], page: 1, totalPages: 2 }
+        : url.includes('subtitle-download/') ? { subtitles: [track], trackId: track.id } : { subtitles: [] },
+        text: async () => 'WEBVTT\n\n00:02:14.000 --> 00:02:16.000\nHello\n' };
+    },
     window: { addEventListener() {} }, history: { pushState() {} },
     localStorage: { getItem: key => positions.get(key), setItem: (key, value) => positions.set(key, value) },
     setTimeout: fn => { timers.set(++nextTimer, fn); return nextTimer; },
@@ -124,4 +131,17 @@ test('client selects conversion automatically and preserves the movie timeline',
   assert.match(video.src, /\/video\/movie$/);
   video.listeners.loadedmetadata();
   assert.equal(video.currentTime, 167);
+  vm.runInContext('openOnlineSubtitles()', context);
+  await vm.runInContext('searchOnlineSubtitles()', context);
+  assert.match(fetchRequests.find(request => request.url.includes('subtitle-search?')).url, /language=en&q=Test&page=1/);
+  assert.match(element('online-subtitle-results').children[0].textContent, /File match/);
+  assert.equal(element('online-subtitle-next').disabled, false);
+  const sourceBeforeDownload = video.src;
+  await vm.runInContext('downloadOnlineSubtitle({ fileId: 101 })', context);
+  assert.equal(fetchRequests.find(request => request.url.includes('subtitle-download/101')).options.method, 'POST');
+  assert.equal(vm.runInContext('selectedSubtitle', context), 'downloaded-101');
+  assert.equal(video.src, sourceBeforeDownload, 'Subtitle downloads must not restart the movie');
+  assert.equal(positions.get('subtitle_movie'), 'downloaded-101');
+  await vm.runInContext('selectSubtitle(null)', context);
+  assert.equal(vm.runInContext('selectedSubtitle', context), null);
 });

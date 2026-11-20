@@ -9,3 +9,7 @@ node_modules/
 /server/deleted.log
 
 /server/subtitle-cache/
+
+.env
+.env.*
+!.env.example

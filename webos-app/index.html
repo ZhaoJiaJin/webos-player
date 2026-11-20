@@ -646,6 +646,26 @@
     #subtitle-delay { display: flex; align-items: center; justify-content: space-between; }
     #subtitle-delay button { background: #333; color: white; border: 0;
       border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+    #online-subtitle-overlay {
+      position: absolute; inset: 5% 8%; z-index: 20; display: none;
+      background: rgba(15,15,15,.98); border: 1px solid #444; border-radius: 12px;
+      padding: 24px; flex-direction: column; gap: 12px;
+    }
+    #online-subtitle-overlay.open { display: flex; }
+    #online-subtitle-controls, #online-subtitle-pages { display: flex; gap: 12px; align-items: center; }
+    #online-subtitle-overlay input, #online-subtitle-overlay select,
+    #online-subtitle-overlay button, #subtitle-search-btn, #find-subtitles-btn {
+      background: #292929; color: white; border: 2px solid transparent;
+      border-radius: 5px; padding: 9px 12px; font-size: .9rem;
+    }
+    #online-subtitle-overlay :focus { outline: none; border-color: #e8621a; }
+    #online-subtitle-overlay button { cursor: pointer; }
+    #online-subtitle-overlay button:disabled { opacity: .4; cursor: default; }
+    #online-subtitle-query { flex: 1; min-width: 120px; }
+    #online-subtitle-status { color: #ccc; font-size: .9rem; }
+    #online-subtitle-results { flex: 1; overflow-y: auto; min-height: 0; }
+    #online-subtitle-results button { display: block; width: 100%; text-align: left; margin-bottom: 8px; white-space: pre-line; }
+    #subtitle-search-btn.focused { background: rgba(232,98,26,.25); }
   </style>
 </head>
 <body>
@@ -726,6 +746,30 @@
 <!-- Player screen -->
 <div id="player-screen">
   <video id="video-player"></video>
+  <div id="online-subtitle-overlay">
+    <h2>Find subtitles · OpenSubtitles</h2>
+    <div id="online-subtitle-controls">
+      <input id="online-subtitle-query" type="text" maxlength="200" aria-label="Movie title" placeholder="Movie title" />
+      <select id="online-subtitle-language" aria-label="Subtitle language">
+        <option value="en">English</option><option value="zh-cn">Chinese (Simplified)</option>
+        <option value="zh-tw">Chinese (Traditional)</option><option value="zh">Chinese</option>
+        <option value="ja">Japanese</option><option value="ko">Korean</option>
+        <option value="fr">French</option><option value="de">German</option>
+        <option value="es">Spanish</option><option value="it">Italian</option>
+        <option value="pt">Portuguese</option><option value="pt-br">Portuguese (Brazil)</option>
+        <option value="ru">Russian</option><option value="ar">Arabic</option>
+      </select>
+      <button id="online-subtitle-search">Search</button>
+      <button id="online-subtitle-close">Close</button>
+    </div>
+    <p id="online-subtitle-status" role="status">Choose a language and search.</p>
+    <div id="online-subtitle-results"></div>
+    <div id="online-subtitle-pages">
+      <button id="online-subtitle-prev" disabled>Previous</button>
+      <span id="online-subtitle-page"></span>
+      <button id="online-subtitle-next" disabled>Next</button>
+    </div>
+  </div>
   <div id="subtitle-text" aria-live="off"></div>
   <div id="subtitle-overlay">
     <div class="audio-menu-header">Subtitles · ↑↓ choose · OK select</div>
@@ -736,6 +780,7 @@
       <span id="subtitle-delay-label"></span>
       <button id="subtitle-later" aria-label="Show subtitles later">+</button>
     </div>
+    <button id="subtitle-search-btn" class="subtitle-option">Find subtitles online…</button>
   </div>
   <div id="audio-track-overlay">
     <div id="audio-track-menu">
@@ -749,6 +794,7 @@
       <span id="play-state">▶</span>
       <div id="progress-wrap"><div id="progress-track"><div id="progress-bar"></div></div></div>
       <span id="video-time"></span>
+      <button id="find-subtitles-btn">Find subtitles</button>
       <button id="subtitle-btn" title="Subtitles (↓)">CC</button>
       <button id="audio-track-btn" title="Audio track (↑)">🔊</button>
     </div>
@@ -1145,6 +1191,7 @@
     delayRow.classList.toggle('focused', subtitleFocus === subtitleTracks.length + 1);
     document.getElementById('subtitle-delay-label').textContent =
       `Delay: ${subtitleDelay > 0 ? '+' : ''}${subtitleDelay.toFixed(1)}s (← →)`;
+    document.getElementById('subtitle-search-btn').classList.toggle('focused', subtitleFocus === subtitleTracks.length + 2);
     const focused = subtitleOverlay.querySelector('.focused');
     if (focused) focused.scrollIntoView({ block: 'nearest' });
   }
@@ -1204,7 +1251,7 @@
       const data = await response.json();
       if (generation !== playbackGeneration) return;
       subtitleTracks = data.subtitles || [];
-      document.getElementById('subtitle-status').textContent = subtitleTracks.length ? '' : 'No subtitles found. Add a matching SRT/VTT beside the video.';
+      document.getElementById('subtitle-status').textContent = subtitleTracks.length ? '' : 'No subtitles found. Choose Find subtitles online, or add a matching SRT/VTT.';
       renderSubtitleMenu();
       const saved = localStorage.getItem(`subtitle_${videoId}`);
       const track = subtitleTracks.find(item => item.id === saved && item.supported);
@@ -1215,6 +1262,7 @@
   }
 
   function resetSubtitles() {
+    closeOnlineSubtitles();
     ++subtitleRequest;
     clearInterval(subtitleTimer);
     subtitleTimer = null;
@@ -1230,6 +1278,146 @@
   });
   document.getElementById('subtitle-earlier').addEventListener('click', () => changeSubtitleDelay(-0.5));
   document.getElementById('subtitle-later').addEventListener('click', () => changeSubtitleDelay(0.5));
+
+  // ── Online subtitle search/download ──
+  const onlineOverlay = document.getElementById('online-subtitle-overlay');
+  const onlineStatus = document.getElementById('online-subtitle-status');
+  let onlineRequest = 0;
+  let onlinePage = 1;
+  let onlineTotalPages = 1;
+  let onlineBusy = false;
+
+  function closeOnlineSubtitles() {
+    ++onlineRequest;
+    onlineBusy = false;
+    onlineOverlay.classList.remove('open');
+  }
+
+  function openOnlineSubtitles() {
+    closeSubtitleMenu();
+    closeAudioMenu();
+    closeOnlineSubtitles();
+    onlineOverlay.classList.add('open');
+    const movie = videos.find(v => v.id === currentVideoId);
+    document.getElementById('online-subtitle-query').value = movie ? movie.title : '';
+    document.getElementById('online-subtitle-language').value = localStorage.getItem('subtitleSearchLanguage') || 'en';
+    document.getElementById('online-subtitle-results').innerHTML = '';
+    onlinePage = onlineTotalPages = 1;
+    onlineStatus.textContent = 'Choose a language, then search. Select a result to download and use it.';
+    updateOnlineButtons();
+    document.getElementById('online-subtitle-search').focus();
+    showBar();
+  }
+
+  function updateOnlineButtons() {
+    document.getElementById('online-subtitle-search').disabled = onlineBusy;
+    document.getElementById('online-subtitle-prev').disabled = onlineBusy || onlinePage <= 1;
+    document.getElementById('online-subtitle-next').disabled = onlineBusy || onlinePage >= onlineTotalPages;
+    document.getElementById('online-subtitle-page').textContent = `${onlinePage} / ${onlineTotalPages}`;
+    onlineOverlay.querySelectorAll('.online-subtitle-result').forEach(button => { button.disabled = onlineBusy; });
+  }
+
+  async function onlineResponse(response) {
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Subtitle request failed');
+    return data;
+  }
+
+  async function searchOnlineSubtitles(page = 1) {
+    if (onlineBusy || !currentVideoId) return;
+    const generation = playbackGeneration;
+    const request = ++onlineRequest;
+    const language = document.getElementById('online-subtitle-language').value;
+    const query = document.getElementById('online-subtitle-query').value.trim();
+    if (!query) { onlineStatus.textContent = 'Enter a movie title.'; return; }
+    localStorage.setItem('subtitleSearchLanguage', language);
+    onlineBusy = true;
+    onlineStatus.textContent = 'Searching OpenSubtitles…';
+    updateOnlineButtons();
+    try {
+      const data = await onlineResponse(await fetch(`${SERVER_URL}/video/${currentVideoId}/subtitle-search?language=${encodeURIComponent(language)}&q=${encodeURIComponent(query)}&page=${page}`));
+      if (generation !== playbackGeneration || request !== onlineRequest) return;
+      onlinePage = data.page;
+      onlineTotalPages = data.totalPages;
+      const list = document.getElementById('online-subtitle-results');
+      list.innerHTML = '';
+      (data.results || []).forEach(result => {
+        const button = document.createElement('button');
+        button.className = 'online-subtitle-result';
+        button.textContent = `${result.hashMatch ? '★ File match' : 'Title match · check timing'} · ${result.language}${result.hearingImpaired ? ' · Hearing impaired' : ''} · ${result.downloads} downloads\n${result.release}\n${result.fileName}`;
+        button.addEventListener('click', () => downloadOnlineSubtitle(result));
+        list.appendChild(button);
+      });
+      onlineStatus.textContent = data.results.length
+        ? 'Select a release to download and use it. File matches are listed first.'
+        : 'No results. Try another language or edit the movie title.';
+    } catch (error) {
+      if (generation === playbackGeneration && request === onlineRequest) onlineStatus.textContent = error.message;
+    } finally {
+      if (generation === playbackGeneration && request === onlineRequest) {
+        onlineBusy = false;
+        updateOnlineButtons();
+      }
+    }
+  }
+
+  async function downloadOnlineSubtitle(result) {
+    if (onlineBusy || !currentVideoId) return;
+    const generation = playbackGeneration;
+    const request = ++onlineRequest;
+    onlineBusy = true;
+    onlineStatus.textContent = 'Downloading subtitles…';
+    updateOnlineButtons();
+    try {
+      const data = await onlineResponse(await fetch(`${SERVER_URL}/video/${currentVideoId}/subtitle-download/${result.fileId}`, { method: 'POST' }));
+      if (generation !== playbackGeneration || request !== onlineRequest) return;
+      subtitleTracks = data.subtitles || [];
+      const track = subtitleTracks.find(t => t.id === data.trackId);
+      if (!track) throw new Error('Downloaded. Reopen the subtitle menu to select the new track.');
+      closeOnlineSubtitles();
+      openSubtitleMenu();
+      await selectSubtitle(track);
+      subtitleFocus = subtitleTracks.findIndex(t => t.id === track.id) + 1;
+      renderSubtitleMenu();
+    } catch (error) {
+      if (generation === playbackGeneration && request === onlineRequest) onlineStatus.textContent = error.message;
+    } finally {
+      if (generation === playbackGeneration && request === onlineRequest) {
+        onlineBusy = false;
+        updateOnlineButtons();
+      }
+    }
+  }
+
+  function onlineSubtitleKeys(e) {
+    if (e.key === 'Escape' || e.keyCode === 461) {
+      closeOnlineSubtitles();
+      openSubtitleMenu();
+      e.preventDefault();
+    } else {
+      const active = document.activeElement;
+      if (active && active.tagName === 'SELECT' && ['ArrowUp', 'ArrowDown', 'Enter', ' '].includes(e.key)) return;
+      if (e.key === 'Enter' && active && active.tagName === 'INPUT') {
+        searchOnlineSubtitles();
+        e.preventDefault();
+      } else if (['ArrowUp', 'ArrowDown'].includes(e.key) ||
+          (['ArrowLeft', 'ArrowRight'].includes(e.key) && (!active || active.tagName !== 'INPUT'))) {
+        const controls = [...onlineOverlay.querySelectorAll('input, select, button:not(:disabled)')];
+        const index = controls.indexOf(active);
+        const next = Math.max(0, Math.min(controls.length - 1, index + (['ArrowDown', 'ArrowRight'].includes(e.key) ? 1 : -1)));
+        if (controls[next]) { controls[next].focus(); controls[next].scrollIntoView({ block: 'nearest' }); }
+        e.preventDefault();
+      }
+    }
+    e.stopPropagation();
+  }
+
+  document.getElementById('subtitle-search-btn').addEventListener('click', openOnlineSubtitles);
+  document.getElementById('find-subtitles-btn').addEventListener('click', openOnlineSubtitles);
+  document.getElementById('online-subtitle-search').addEventListener('click', () => searchOnlineSubtitles());
+  document.getElementById('online-subtitle-close').addEventListener('click', () => { closeOnlineSubtitles(); openSubtitleMenu(); });
+  document.getElementById('online-subtitle-prev').addEventListener('click', () => searchOnlineSubtitles(onlinePage - 1));
+  document.getElementById('online-subtitle-next').addEventListener('click', () => searchOnlineSubtitles(onlinePage + 1));
 
   // ── Playback ────────────────────────────────────────────
 
@@ -1379,7 +1567,7 @@
     videoBar.classList.remove('hidden');
     clearTimeout(barTimer);
     barTimer = setTimeout(() => {
-      if (!subtitleOverlay.classList.contains('open') && !audioOverlay.classList.contains('open')) videoBar.classList.add('hidden');
+      if (!onlineOverlay.classList.contains('open') && !subtitleOverlay.classList.contains('open') && !audioOverlay.classList.contains('open')) videoBar.classList.add('hidden');
     }, 3000);
   }
 
@@ -1399,14 +1587,17 @@
     if (inConfirm || inSettings) return; // let the dialog handle its own keys
 
     if (inPlayer) {
+      if (onlineOverlay.classList.contains('open')) { onlineSubtitleKeys(e); return; }
       if (subtitleOverlay.classList.contains('open')) {
         if (e.key === 'Escape' || e.keyCode === 461) closeSubtitleMenu();
         else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-          subtitleFocus = Math.max(0, Math.min(subtitleTracks.length + 1,
+          subtitleFocus = Math.max(0, Math.min(subtitleTracks.length + 2,
             subtitleFocus + (e.key === 'ArrowDown' ? 1 : -1)));
           renderSubtitleMenu();
         } else if (subtitleFocus === subtitleTracks.length + 1 && ['ArrowLeft', 'ArrowRight'].includes(e.key)) {
           changeSubtitleDelay(e.key === 'ArrowRight' ? 0.5 : -0.5);
+        } else if (e.key === 'Enter' && subtitleFocus === subtitleTracks.length + 2) {
+          openOnlineSubtitles();
         } else if (e.key === 'Enter' && subtitleFocus <= subtitleTracks.length) {
           selectSubtitle(subtitleFocus === 0 ? null : subtitleTracks[subtitleFocus - 1]);
         }

@@ -111,6 +111,27 @@ ares-launch com.example.sambavideoapp
 - Image subtitles such as Blu-ray PGS and DVD VobSub are listed as unavailable. Add an external SRT/VTT alternative; video is never re-encoded to burn subtitles in.
 - Subtitle discovery/extraction failures do not stop video playback. Cache files are generated locally and ignored by Git.
 
+### Find and download subtitles online
+
+During playback, click **Find subtitles**, or press **Down** → **Find subtitles online…** in the CC menu. Choose a language, edit the title if needed, and press **Search**. Results include the release name, file match status, hearing-impaired flag, and download count. Use Previous/Next for more results. Select a result to download and activate it without restarting playback. All downloaded versions remain available in the CC menu, alongside local and embedded subtitles.
+
+The Raspberry Pi performs searches and downloads. The TV never receives provider credentials. Search uses the movie title and OpenSubtitles hash (only the first and last 64 KiB are read), prioritizes file matches, and caches searches for five minutes. Downloads happen only when you select a result. Each version is saved beside its movie as `Movie.en.opensubtitles-12345.srt`; choosing an already downloaded version does not spend another download. The server needs write permission to the movie folder.
+
+**Server setup:** requires Node.js 18+ for online subtitle requests. Create an API key in your [OpenSubtitles API consumer profile](https://www.opensubtitles.com/en/consumers), then set the environment before starting the server:
+
+```bash
+cd server
+export OPENSUBTITLES_API_KEY='your-api-key'
+# Optional: use your account download allowance instead of the anonymous allowance.
+export OPENSUBTITLES_USERNAME='your-username'
+export OPENSUBTITLES_PASSWORD='your-password'
+npm start
+```
+
+Leave both username and password unset to use the anonymous allowance. If you run the server through systemd or another process manager, set these environment variables there and restart it. `OPENSUBTITLES_USER_AGENT` optionally overrides the default `WebOSPlayer v1.0`; use the application identity registered for your API key. Do not put credentials in the TV app or commit them to Git. Quotas depend on the provider/account; the client displays authentication, quota, network, and write-permission errors. Existing local subtitles and video playback work without an API key. Files must be UTF-8 SRT; unsupported provider responses are rejected.
+
+Provider references: [API setup](https://opensubtitles.tawk.help/article/getting-started), [search/download integration](https://blog.opensubtitles.com/opensubtitles/how-to-build-a-movie-subtitle-finder-cli-with-python-and-the-opensubtitles-api), [movie hash specification](https://opensubtitles.github.io/oshash/).
+
 ### Private videos
 - Mark any video as private with the 🔒 button (top-left of card)
 - Private IDs stored in `server/private.txt`, one per line
@@ -141,6 +162,8 @@ ares-launch com.example.sambavideoapp
 | Endpoint | Description |
 |---|---|
 | `GET /videos` | Paginated video list. Params: `page`, `limit`, `orderBy`, `order`, `q`, `private` |
+| `GET /video/:id/subtitle-search` | Search OpenSubtitles. Params: `language`, `q`, `page`. Requires server API key. |
+| `POST /video/:id/subtitle-download/:fileId` | Download a file from recent search results, returning the refreshed subtitle list and selected track ID. |
 | `GET /video/:id/subtitles` | List external and embedded subtitles with supported formats and language labels |
 | `GET /video/:id/subtitles/:trackId` | Serve a cached WebVTT conversion of the selected text track |
 | `GET /video/:id/info` | Audio track metadata |
@@ -164,4 +187,4 @@ ares-launch com.example.sambavideoapp
 
 ## Tests
 
-Run `npm test` from `server/`. The playback tests require `ffmpeg` and `ffprobe`, including the `libx264`, `dca`, and `ac3` encoders for the generated sample. They check DTS-to-AC3 streaming, seek timestamps, invalid requests, client resume/track switching, subtitle discovery/extraction/cache invalidation, and subtitle timing.
+Run `npm test` from `server/`. The playback tests require `ffmpeg` and `ffprobe`, including the `libx264`, `dca`, and `ac3` encoders for the generated sample. They check DTS-to-AC3 streaming, seek timestamps, invalid requests, client resume/track switching, subtitle discovery/extraction/cache invalidation, subtitle timing, and online search/download behavior (provider requests are mocked; no API quota is used by tests).

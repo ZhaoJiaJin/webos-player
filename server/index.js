@@ -214,6 +214,8 @@ const subtitles = require('./subtitles')({
   getMetadata,
 });
 
+const onlineSubtitles = require('./opensubtitles')({ mediaRoot: MEDIA_ROOT });
+
 // --- Routes ---
 
 app.get('/status', (_req, res) => {
@@ -311,6 +313,31 @@ app.get('/video/:id', (req, res) => {
       'Accept-Ranges': 'bytes',
     });
     fs.createReadStream(filePath).pipe(res);
+  }
+});
+
+app.get('/video/:id/subtitle-search', async (req, res) => {
+  const video = videoCache.find(v => v.id === req.params.id);
+  if (!video) return res.status(404).json({ error: 'Not found' });
+  try {
+    res.json(await onlineSubtitles.search(video, {
+      language: req.query.language || 'en', query: req.query.q, page: req.query.page || 1,
+    }));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Could not search for subtitles' });
+  }
+});
+
+app.post('/video/:id/subtitle-download/:fileId', async (req, res) => {
+  const video = videoCache.find(v => v.id === req.params.id);
+  if (!video) return res.status(404).json({ error: 'Not found' });
+  try {
+    const result = await onlineSubtitles.download(video, Number(req.params.fileId));
+    const tracks = await subtitles.list(video);
+    const trackId = `external-${crypto.createHash('sha256').update(result.filename).digest('hex').slice(0, 24)}`;
+    res.json({ ...result, subtitles: tracks, trackId });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Could not save subtitles. Check the server movie folder and internet connection.' });
   }
 });
 
